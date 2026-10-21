@@ -102,9 +102,10 @@ def _diff(cfg: Target, rules) -> int:
     return 0
 
 
-def _cost(cfg: Target, cost: CostConfig, book: PriceBook, period: Period | None, refresh: bool) -> int:
-    actuals = load_actuals(cfg, period, refresh) if period else None
-    report = build_report(cfg, book, cost, actuals)
+def _cost(cfg: Target, cost: CostConfig, book: PriceBook, period: Period | None, refresh: bool,
+          detail: bool = False) -> int:
+    actuals = load_actuals(cfg, period, refresh, detail=detail) if period else None
+    report = build_report(cfg, book, cost, actuals, detail)
     out = cfg.out_dir / "cost-report.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_cost_markdown(report))
@@ -115,6 +116,8 @@ def _cost(cfg: Target, cost: CostConfig, book: PriceBook, period: Period | None,
         print(f"note: {cfg.label}: actual cost unavailable — {actuals.error}", file=sys.stderr)
     elif actuals:
         summary += f", actual {actuals.total:,.2f}{' ' + actuals.currency if actuals.currency else ''} for {actuals.period}"
+        if actuals.detail_error:
+            print(f"note: {cfg.label}: actual cost per resource unavailable — {actuals.detail_error}", file=sys.stderr)
     print(f"{out}: {summary}, {sum(g.not_estimated for g in groups)} resource(s) not estimated")
     return 0
 
@@ -207,6 +210,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="actual-cost period start (default: first day of last month)")
     co.add_argument("--to", dest="end", type=date.fromisoformat, metavar="YYYY-MM-DD",
                     help="actual-cost period end, inclusive (default: last day of last month)")
+    co.add_argument("--detail", action="store_true",
+                    help="add a per-resource, per-meter breakdown under each resource group (with --actual, what was"
+                         " billed per resource and meter too)")
     co.add_argument("--refresh", action="store_true",
                     help="fetch prices (and actual cost) again instead of using the cache")
     sub.add_parser("icons", help="download the views file's icons into <cache>/icons/ (re-run to refresh)")
@@ -233,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
                 elif args.command == "diff":
                     rc = max(rc, _diff(target, rules))
                 elif args.command == "cost":
-                    rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh))
+                    rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
                 else:
                     rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names))
             except (CacheMissing, AzError, PriceError) as exc:

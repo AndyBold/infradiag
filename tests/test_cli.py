@@ -302,6 +302,31 @@ def test_cost_actual_side_by_side_and_refused_subscription_carries_on(tmp_path, 
     assert "Contoso-Test" in captured.err and "actual cost unavailable" in captured.err
 
 
+def test_cost_detail_breaks_estimate_and_actual_down_per_resource(tmp_path, monkeypatch, capsys):
+    def fake_az(args):
+        if len(json.loads(args[6])["dataset"]["grouping"]) == 1:
+            return {"properties": {"columns": [{"name": "Cost"}, {"name": "ResourceGroupName"}, {"name": "Currency"}],
+                                   "rows": [[150.0, DEV, "GBP"]]}}
+        return {"properties": {"columns": [{"name": "Cost"}, {"name": "ResourceId"}, {"name": "Meter"}],
+                               "rows": [[140.0, VGW.lower(), "VpnGw1AZ"], [10.0, VGW.lower(), "Data Transfer Out"]]}}
+
+    monkeypatch.setattr(actuals, "run_az", fake_az)
+    args = setup_cost(tmp_path)
+    assert cli.main(args + ["cost", "--detail"]) == 0
+    md = (tmp_path / DEV_OUT / "cost-report.md").read_text()
+    assert "| ↳ VpnGw1AZ gateway — VpnGw1AZ |  |  | £0.2 per hour | 730 × 1 Hour | fixed: 730 h | £146.00 |\n" in md
+    assert "Actual" not in md
+
+    assert cli.main(args + ["cost", "--detail", "--actual", "--from", "2026-09-01", "--to", "2026-09-30"]) == 0
+    md = (tmp_path / DEV_OUT / "cost-report.md").read_text()
+    assert "| ↳ VpnGw1AZ gateway — VpnGw1AZ |  |  | £0.2 per hour | 730 × 1 Hour | fixed: 730 h | £146.00 | £140.00 |" in md
+    assert "| ↳ billed: Data Transfer Out |  |  |  |  |  |  | £10.00 |" in md
+    data = json.loads((tmp_path / DEV_OUT / "cost-report.json").read_text())
+    assert data["detail"][0]["resources"][0]["actual"] == 150.0
+    assert (tmp_path / "cache" / SUB / "actual-cost" / "2026-09-01_2026-09-30-by-resource.json").exists()
+    capsys.readouterr()
+
+
 def test_cost_period_needs_actual_and_must_be_ordered(tmp_path, capsys):
     args = setup_cost(tmp_path)
     assert cli.main(args + ["cost", "--from", "2026-09-01"]) == 2

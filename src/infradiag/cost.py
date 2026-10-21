@@ -12,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 
-from .actuals import Actuals
-from .config import CostConfig, Target
+from .actuals import NO_GROUP, Actuals, resource_group_of
+from .config import CostConfig, Target, UsageRule
 from .diff import EXISTS_PER_WHATIF
 from .extract_azure import load_arg_cache
 from .extract_bicep import load_whatif_cache
@@ -27,6 +27,9 @@ DNS_ZONE = "Zone 1"  # Azure DNS prices by zone; Zone 1 covers North America and
 
 DEPLOYED, PLANNED, UNKNOWN = "deployed", "planned", "unknown"
 ESTIMATED, FREE, NOT_ESTIMATED = "estimated", "no charge", "not estimated"
+# Where a charge's quantity comes from: the billing period and the resource's own settings, a cost.usage rule, or a
+# default the estimator assumed because the resource doesn't say.
+FIXED, USAGE_RULE, DEFAULT = "fixed", "usage rule", "default"
 
 
 @dataclass
@@ -87,8 +90,10 @@ class NotEstimated(Exception):
 class Charge:
     label: str
     meter: Meter
-    quantity: float  # meter units per month
-    basis: str       # how the quantity was reached, for the report
+    quantity: float                # meter units per month
+    basis: str                     # how the quantity was reached, for the report
+    source: str = FIXED            # fixed, usage rule or default
+    rule: UsageRule | None = None  # the cost.usage rule a usage-rule quantity comes from
 
 
 @dataclass
@@ -99,8 +104,8 @@ class Plan:
     free: str = ""                                          # why the resource itself costs nothing
 
 
-def _hourly(label: str, meter: Meter, count: float = 1) -> Charge:
-    return Charge(label, meter, HOURS * count, f"{HOURS} h" + (f" × {count:g}" if count != 1 else ""))
+def _hourly(label: str, meter: Meter, count: float = 1, source: str = FIXED) -> Charge:
+    return Charge(label, meter, HOURS * count, f"{HOURS} h" + (f" × {count:g}" if count != 1 else ""), source)
 
 
 def _daily(label: str, meter: Meter) -> Charge:
@@ -115,8 +120,9 @@ def _monthly(label: str, meter: Meter) -> Charge:
 class Usage:
     """Usage the config states for one resource; asking for a key it lacks records the part as not estimated."""
 
-    def __init__(self, values: dict[str, float], plan: Plan):
-        self.values, self.plan = values, plan
+    def __init__(self, rules: dict[str, UsageRule], plan: Plan):
+        self.rules, self.plan = rules, plan
+        self.values = {key: rule.values[key] for key, rule in rules.items()}
 
     def get(self, key: str, what: str) -> float | None:
         if key not in self.values:
@@ -127,18 +133,20 @@ class Usage:
     def charge(self, key: str, what: str, meter: Meter, scale: float = 1, unit: str = "") -> None:
         value = self.get(key, what)
         if value is not None:
-            self.plan.charges.append(Charge(what, meter, value * scale, f"{value:g} {unit or key} (assumed)"))
+            self.plan.charges.append(Charge(what, meter, value * scale, f"{value:g} {unit or key} (assumed)", USAGE_RULE,
+                                            self.rules[key]))
 
 
 def _sku_name(r: Resource) -> str:
     return str(r.sku.get("name") or "")
 
 
-def _vm(region: str, size: str, label: str, hours: float, basis: str) -> Charge:
+def _vm(region: str, size: str, label: str, hours: float, basis: str, source: str = FIXED,
+        rule: UsageRule | None = None) -> Charge:
     """A Linux pay-as-you-go VM: Spot, low-priority, Windows and Cloud Services prices are other items for the size."""
     meter = Meter(PriceQuery("Virtual Machines", region, size), "1 Hour",
                   reject=("Windows", "Spot", "Low Priority", "Cloud Services", "Dedicated Host"))
-    return Charge(label, meter, hours, basis)
+    return Charge(label, meter, hours, basis, source, rule)
 
 
 def _registry(r: Resource, plan: Plan, usage: Usage) -> None:
@@ -211,12 +219,14 @@ def _forwarding_ruleset(r: Resource, plan: Plan, usage: Usage) -> None:
 def _event_hubs(r: Resource, plan: Plan, usage: Usage) -> None:
     tier = _sku_name(r).title()
     units = float(r.sku.get("capacity") or 1)
+    source = FIXED if r.sku.get("capacity") else DEFAULT
     query = PriceQuery("Event Hubs", r.region)
     unit_meter = {"Basic": "Basic Throughput Unit", "Standard": "Standard Throughput Unit",
                   "Premium": "Premium Processing Unit"}.get(tier)
     if unit_meter is None:
         raise NotEstimated(f"Event Hubs {tier or 'unknown'} tier isn't mapped")
-    plan.charges.append(_hourly(unit_meter.lower() + "s", Meter(query, "1 Hour", "Event Hubs", tier, unit_meter), units))
+    plan.charges.append(_hourly(unit_meter.lower() + "s", Meter(query, "1 Hour", "Event Hubs", tier, unit_meter), units,
+                                source))
     if tier != "Premium":
         usage.charge("ingress_events_millions", "ingress events",
                      Meter(query, "1M", "Event Hubs", tier, f"{tier} Ingress Events"), unit="million events")
@@ -230,7 +240,8 @@ def _service_bus(r: Resource, plan: Plan, usage: Usage) -> None:
     elif tier == "Premium":
         units = float(r.sku.get("capacity") or 1)
         plan.charges.append(_hourly("messaging units", Meter(query, "1/Hour", "Service Bus", tier,
-                                                             "Premium Messaging Unit"), units))
+                                                             "Premium Messaging Unit"), units,
+                                    FIXED if r.sku.get("capacity") else DEFAULT))
         return
     elif tier != "Basic":
         raise NotEstimated(f"Service Bus {tier or 'unknown'} tier isn't mapped")
@@ -332,7 +343,8 @@ def _devops_pool(r: Resource, plan: Plan, usage: Usage) -> None:
         raise NotEstimated("agent VM size not found")
     hours = usage.get("agent_hours", f"agent VMs ({size})")
     if hours is not None:
-        plan.charges.append(_vm(r.region, size, f"agent VMs ({size})", hours, f"{hours:g} agent hours (assumed)"))
+        plan.charges.append(_vm(r.region, size, f"agent VMs ({size})", hours, f"{hours:g} agent hours (assumed)",
+                                USAGE_RULE, usage.rules["agent_hours"]))
         plan.notes.append("agent OS disks not included")
 
 
@@ -485,6 +497,10 @@ class Line:
     quantity: float
     unit: str
     unit_price: float
+    meter: str = ""                # the Retail Prices item's meterName and productName
+    product: str = ""
+    source: str = FIXED            # where the quantity comes from (see Charge)
+    rule: UsageRule | None = None
 
     @property
     def monthly(self) -> float:
@@ -519,11 +535,11 @@ def estimate(r: Resource, book: PriceBook, cost: CostConfig) -> Estimate:
         return Estimate(r, NOT_ESTIMATED, reason="what-if couldn't evaluate it")
     plan = Plan()
     try:
-        estimator(r, plan, Usage(cost.usage_for(r.type, r.name), plan))
+        estimator(r, plan, Usage(cost.usage_rules_for(r.type, r.name), plan))
         lines = []
         for c in plan.charges:
             p = book.price(c.meter)
-            lines.append(Line(c.label, c.basis, c.quantity, p.unit, p.unit_price))
+            lines.append(Line(c.label, c.basis, c.quantity, p.unit, p.unit_price, p.meter, p.product, c.source, c.rule))
     except NotEstimated as exc:
         return Estimate(r, NOT_ESTIMATED, reason=str(exc))
     except NoPrice as exc:
@@ -577,15 +593,132 @@ class CostReport:
     estimates: list[Estimate]
     price_dates: list[str]
     actuals: Actuals | None = None
+    detail: bool = False  # add the per-resource, per-meter breakdown
 
     @property
     def groups(self) -> list[GroupTotal]:
         return totals(self.estimates)
 
+    @property
+    def billed(self) -> dict[str, dict[str, float]] | None:
+        """Actual cost per resource and meter, when the detail query ran and succeeded."""
+        a = self.actuals
+        return a.by_resource if self.detail and a is not None and not a.error and not a.detail_error else None
 
-def build_report(cfg: Target, book: PriceBook, cost: CostConfig, actuals: Actuals | None = None) -> CostReport:
+
+def build_report(cfg: Target, book: PriceBook, cost: CostConfig, actuals: Actuals | None = None,
+                 detail: bool = False) -> CostReport:
     estimates = [estimate(r, book, cost) for r in collect_resources(cfg)]
-    return CostReport(cfg.label, book.currency, estimates, sorted(book.fetched), actuals)
+    return CostReport(cfg.label, book.currency, estimates, sorted(book.fetched), actuals, detail)
+
+
+# --- the detailed breakdown -----------------------------------------------------------------------------------------
+
+def sku_label(r: Resource) -> str:
+    """The SKU, tier and capacity Azure reports for the resource."""
+    sku = r.sku or r.properties.get("sku") or {}
+    name, tier, capacity = (str(sku.get(k) or "") for k in ("name", "tier", "capacity"))
+    parts = [name, tier if tier.lower() != name.lower() else "", f"capacity {capacity}" if capacity else ""]
+    return " / ".join(p for p in parts if p)
+
+
+@dataclass
+class MeterDetail:
+    """One row of a resource's breakdown: an estimated meter, a billed meter, or both when they are the same meter."""
+    line: Line | None = None
+    billed_meter: str = ""
+    actual: float | None = None
+
+
+@dataclass
+class ResourceDetail:
+    resource_id: str
+    estimate: Estimate | None      # None: billed, but no extracted resource has this ID
+    meters: list[MeterDetail]
+    actual: float | None = None    # None without actual detail; 0 when nothing was billed to it
+    unmatched: str = ""            # why a billed resource matched nothing extracted
+
+    @property
+    def name(self) -> str:
+        if self.estimate is not None:
+            return self.estimate.resource.name
+        parts = parse_id(self.resource_id)
+        return parts.name if parts else self.resource_id or "(no resource)"
+
+    @property
+    def type(self) -> str:
+        if self.estimate is not None:
+            return self.estimate.resource.type
+        parts = parse_id(self.resource_id)
+        return parts.type if parts else ""
+
+
+@dataclass
+class GroupDetail:
+    resource_group: str
+    resources: list[ResourceDetail] = field(default_factory=list)  # extracted resources, with what was billed to them
+    unmatched: list[ResourceDetail] = field(default_factory=list)  # billed resources matching nothing extracted
+    note: str = ""                                                 # set for a resource group infradiag didn't extract
+
+
+# Resource groups Azure creates and manages for a resource elsewhere, whose charges estimates put with that resource.
+MANAGED_GROUPS = {
+    "mc_*": "Azure-managed resource group holding an AKS cluster's nodes, disks and load balancer;"
+            " the estimate prices nodes with the cluster",
+    "me_*": "Azure-managed resource group holding a Container Apps environment's infrastructure",
+}
+
+
+def _group_note(rg: str) -> str:
+    if rg == NO_GROUP:
+        return "charges Cost Management ties to no resource group"
+    return _lookup(MANAGED_GROUPS, rg) or "resource group infradiag didn't extract"
+
+
+def _unmatched_reason(rid: str, rg: str, extracted: set[str]) -> str:
+    managed = _lookup(MANAGED_GROUPS, rg) is not None
+    if not rid:
+        return "charge tied to no resource"
+    if rg in extracted:
+        return "not in the extract (" + ("Azure-managed resource group" if managed
+                                         else "deleted since, or not returned by Resource Graph") + ")"
+    return "in an Azure-managed resource group" if managed else "resource group not extracted"
+
+
+def _matched(e: Estimate, billed: dict[str, float] | None) -> ResourceDetail:
+    """Pair an estimated meter with a billed one only when the names are equal and no other estimated line shares it;
+    everything else billed is listed on its own."""
+    names = [line.meter.lower() for line in e.lines if line.meter]
+    remaining = {m.lower(): (m, cost) for m, cost in (billed or {}).items()}
+    rows = []
+    for line in e.lines:
+        key = line.meter.lower()
+        hit = remaining.pop(key, None) if key and names.count(key) == 1 else None
+        rows.append(MeterDetail(line, *(hit or ("", None))))
+    rows += [MeterDetail(billed_meter=m, actual=cost) for m, cost in sorted(remaining.values(), key=lambda mc: -mc[1])]
+    return ResourceDetail(e.resource.id, e, rows, None if billed is None else sum(billed.values()))
+
+
+def breakdown(report: CostReport) -> list[GroupDetail]:
+    """Per resource group: each priced or unpriced resource (and free ones that were billed anyway), its meters and
+    what was billed to it, then billed resources that match nothing extracted. Extracted groups come first."""
+    billed = dict(report.billed) if report.billed is not None else None
+    extracted = {e.resource.resource_group for e in report.estimates}
+    groups = {rg: GroupDetail(rg) for rg in sorted(extracted)}
+    for e in report.estimates:
+        meters = billed.pop(e.resource.id, {}) if billed is not None else None
+        if e.state != FREE or meters:
+            groups[e.resource.resource_group].resources.append(_matched(e, meters))
+    for rid, meters in (billed or {}).items():
+        rg = resource_group_of(rid)
+        g = groups.setdefault(rg, GroupDetail(rg, note=_group_note(rg)))
+        rows = [MeterDetail(billed_meter=m, actual=cost) for m, cost in sorted(meters.items(), key=lambda mc: -mc[1])]
+        g.unmatched.append(ResourceDetail(rid, None, rows, sum(meters.values()), _unmatched_reason(rid, rg, extracted)))
+    for g in groups.values():
+        g.resources.sort(key=lambda d: (-(d.estimate.monthly if d.estimate.state == ESTIMATED else 0),
+                                        -(d.actual or 0), d.name))
+        g.unmatched.sort(key=lambda d: (-(d.actual or 0), d.resource_id))
+    return sorted(groups.values(), key=lambda g: (bool(g.note), g.resource_group))
 
 
 SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
@@ -657,13 +790,91 @@ def _actuals_intro(report: CostReport) -> list[str]:
         text += f" Estimates are in {report.currency}, so compare the two with the exchange rate in mind."
     if not actuals.by_group:
         text += " Cost Management returned no charges for this period."
-    return [text, ""]
+    lines = [text, ""]
+    if report.detail and actuals.detail_error:
+        lines += [f"**Actual cost per resource: not available** — {actuals.detail_error}. The detailed breakdowns"
+                  " below show estimates only.", ""]
+    return lines
+
+
+def _cell(text: str) -> str:
+    return text.replace("|", "\\|")
+
+
+def _quantity(line: Line) -> str:
+    return f"{line.quantity:,.2f}".rstrip("0").rstrip(".") + f" × {line.unit}"
+
+
+def _source(line: Line) -> str:
+    if line.source == USAGE_RULE and line.rule is not None:
+        name = "" if line.rule.name == "*" else f", name `{line.rule.name}`"
+        return f"usage rule (`{line.rule.type}`{name}): {line.basis}"
+    return f"{line.source}: {line.basis}"
+
+
+def _detail_lines(g: GroupDetail, report: CostReport) -> list[str]:
+    """The breakdown for one resource group, collapsed under <details> so the summary stays readable."""
+    cur, actuals = report.currency, report.actuals
+    billed = report.billed is not None
+    period = f" {actuals.period}" if actuals is not None else ""
+    money = lambda amount: _money(amount, cur)  # noqa: E731
+    paid = lambda amount: "" if amount is None else _money(amount, actuals.currency)  # noqa: E731
+    lines: list[str] = []
+    if g.resources:
+        head = ["Resource / meter", "Type", "SKU / size", "Unit price", "Quantity", "Quantity source", "Estimate / month"]
+        width = len(head) + billed
+
+        def row(*cells: str) -> str:
+            return "| " + " | ".join([*cells, *[""] * (width - len(cells))]) + " |"
+
+        lines += [row(*head, *([f"Actual{period}"] if billed else [])),
+                  "|---|---|---|--:|--:|---|--:|" + ("--:|" if billed else "")]
+        for d in g.resources:
+            e = d.estimate
+            r = e.resource
+            total = f"**{money(e.monthly)}**" if e.state == ESTIMATED else e.state
+            nothing_billed = all(m.actual is None for m in d.meters)
+            actual = ["—" if nothing_billed else f"**{paid(d.actual)}**"] if billed else []
+            lines.append(row(f"**{_cell(r.name)}** ({r.status})", f"`{r.type}`", _cell(sku_label(r)) or "—", "", "",
+                             "", total, *actual))
+            for m in d.meters:
+                if m.line is None and round(m.actual or 0, 2) == 0:
+                    continue  # free-grant meters billed at zero; the JSON keeps them
+                if m.line is None:
+                    lines.append(row(f"↳ billed: {_cell(m.billed_meter)}", "", "", "", "", "", "", paid(m.actual)))
+                    continue
+                meter = f"{_cell(m.line.label)} — {_cell(m.line.meter)}" if m.line.meter else _cell(m.line.label)
+                lines.append(row(f"↳ {meter}", "", "", _unit_price(m.line.unit_price, m.line.unit, cur),
+                                 _quantity(m.line), _cell(_source(m.line)), money(m.line.monthly),
+                                 *([paid(m.actual)] if billed else [])))
+            if e.state != ESTIMATED:
+                lines.append(row(f"↳ _{e.state}: {_cell(e.reason)}_"))
+            else:
+                lines += [row(f"↳ _not estimated: {_cell(u)} — no usage stated_") for u in e.missing_usage]
+                lines += [row(f"↳ _{_cell(n)}_") for n in e.notes]
+        lines.append("")
+    if g.unmatched:
+        if g.resources:
+            lines += [f"Billed in {g.resource_group} but not matched to an extracted resource:", ""]
+        lines += [f"| Billed resource / meter | Type | Actual{period} | Why unmatched |", "|---|---|--:|---|"]
+        for d in g.unmatched:
+            lines.append(f"| **{_cell(d.name)}** | {f'`{d.type}`' if d.type else '—'} | **{paid(d.actual)}**"
+                         f" | {d.unmatched} |")
+            lines += [f"| ↳ {_cell(m.billed_meter)} | | {paid(m.actual)} | |" for m in d.meters
+                      if round(m.actual or 0, 2) != 0]
+        lines.append("")
+    if not lines:
+        return []
+    count = len(g.resources) + len(g.unmatched)
+    return ["<details>", f"<summary>Detailed breakdown: {count} resource{'s' if count != 1 else ''}</summary>", "",
+            *lines, "</details>", ""]
 
 
 def render_markdown(report: CostReport) -> str:
     cur = report.currency
     money = lambda amount: _money(amount, cur)  # noqa: E731
     groups = report.groups
+    details = {d.resource_group: d for d in breakdown(report)} if report.detail else {}
     lines = [
         "# Cost estimate",
         "",
@@ -704,6 +915,12 @@ def render_markdown(report: CostReport) -> str:
             for e in free:
                 counts[e.resource.type] = counts.get(e.resource.type, 0) + 1
             lines += ["No charge: " + ", ".join(f"`{t}` ×{n}" for t, n in sorted(counts.items())) + ".", ""]
+        if report.detail:
+            lines += _detail_lines(details[g.resource_group], report)
+
+    for d in (d for d in details.values() if d.note):
+        lines += [f"## {d.resource_group}", "", f"_Not extracted: {d.note}. Billed charges only, no estimate._", "",
+                  *_detail_lines(d, report)]
 
     missing = [e for e in report.estimates if e.state == NOT_ESTIMATED]
     lines += ["## Not estimated", "",
@@ -728,8 +945,42 @@ def _actuals_json(actuals: Actuals | None) -> dict | None:
             "total": None if actuals.error else round(actuals.total, 2)}
 
 
+def _line_json(line: Line) -> dict:
+    return {"label": line.label, "meter": line.meter or None, "product": line.product or None,
+            "unit_price": line.unit_price, "unit": line.unit, "quantity": round(line.quantity, 4),
+            "quantity_source": line.source, "basis": line.basis,
+            "usage_rule": {"type": line.rule.type, "name": line.rule.name} if line.rule else None,
+            "monthly": round(line.monthly, 2)}
+
+
+def _meter_json(m: MeterDetail) -> dict:
+    return {"estimate": _line_json(m.line) if m.line else None, "billed_meter": m.billed_meter or None,
+            "actual": None if m.actual is None else round(m.actual, 2)}
+
+
+def _resource_detail_json(d: ResourceDetail) -> dict:
+    data = {"id": d.resource_id or None, "name": d.name, "type": d.type or None}
+    if d.estimate is not None:
+        e = d.estimate
+        data.update({"sku": sku_label(e.resource) or None, "status": e.resource.status, "state": e.state,
+                     "monthly": round(e.monthly, 2) if e.state == ESTIMATED else None, "reason": e.reason or None,
+                     "missing_usage": e.missing_usage, "notes": e.notes})
+    else:
+        data["unmatched"] = d.unmatched
+    data["actual"] = None if d.actual is None else round(d.actual, 2)
+    data["meters"] = [_meter_json(m) for m in d.meters]
+    return data
+
+
+def _detail_json(report: CostReport) -> list[dict]:
+    return [{"resource_group": g.resource_group, "extracted": not g.note, "note": g.note or None,
+             "resources": [_resource_detail_json(d) for d in g.resources],
+             "unmatched_actual": [_resource_detail_json(d) for d in g.unmatched]}
+            for g in breakdown(report)]
+
+
 def render_json(report: CostReport) -> dict:
-    return {
+    data = {
         "subscription": report.subscription,
         "currency": report.currency,
         "basis": "estimates: Azure Retail Prices API pay-as-you-go list prices, 730 hours per month;"
@@ -754,3 +1005,8 @@ def render_json(report: CostReport) -> dict:
             for e in report.estimates
         ],
     }
+    if report.detail:
+        data["detail"] = _detail_json(report)
+        if report.actuals is not None:
+            data["actual"]["detail_error"] = report.actuals.detail_error or None
+    return data

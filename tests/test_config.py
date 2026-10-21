@@ -208,6 +208,9 @@ def test_cost_usage_first_matching_rule_wins_per_key(tmp_path):
     assert cost.usage_for("Microsoft.Sql/servers/databases", "Ledger-DB") == {"vcore_hours": 100, "stored_gb": 5}
     assert cost.usage_for("microsoft.sql/servers/databases", "orders-db") == {"vcore_hours": 20, "stored_gb": 5}
     assert cost.usage_for("microsoft.keyvault/vaults", "kv") == {}
+    rules = cost.usage_rules_for("microsoft.sql/servers/databases", "ledger-db")
+    assert {key: (rule.type, rule.name) for key, rule in rules.items()} == {
+        "vcore_hours": ("microsoft.sql/servers/databases", "ledger-*"), "stored_gb": ("microsoft.sql/servers/*", "*")}
 
 
 @pytest.mark.parametrize("rule, message", [
