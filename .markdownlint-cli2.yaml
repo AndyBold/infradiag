@@ -1,0 +1,8 @@
+config:
+  # Prose is not hard-wrapped to a fixed width.
+  MD013: false
+  # Tables are written compact or aligned as convenient.
+  MD060: false
+ignores:
+  # Dated design and plan records, kept as written.
+  - docs/superpowers/**

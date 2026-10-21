@@ -1,0 +1,106 @@
+# Rules for views and the drift report. Types are lowercased ARM types; patterns use fnmatch (* ?).
+# These defaults are generic Azure. Copy this file next to your config (`infradiag init` does) to tailor it.
+
+# --- shared by both diagrams ---------------------------------------------------------------
+hide_types:
+  - microsoft.authorization/*
+  - microsoft.insights/diagnosticsettings
+  - microsoft.managedidentity/userassignedidentities/federatedidentitycredentials
+  - microsoft.sql/servers/firewallrules
+  - microsoft.network/privatednszones/a
+  - microsoft.network/privatednszones/cname
+  - microsoft.network/privatednszones/soa
+  - microsoft.network/privateendpoints/privatednszonegroups
+  - microsoft.network/networkinterfaces       # folded into their private endpoint
+  - microsoft.app/containerapps/revisions
+  - microsoft.portal/dashboards
+hide_managed: true                             # resources Azure creates for another (managedBy set)
+hide_edges_to_types:                           # nodes stay, but nobody draws an arrow to them
+  - microsoft.managedidentity/userassignedidentities
+
+collapse:                                      # node -> edge between its parent and a referenced resource
+  - type: microsoft.network/privatednszones/virtualnetworklinks
+    target_path: virtualNetwork.id
+    label: dns link
+  - type: microsoft.network/virtualnetworks/virtualnetworkpeerings
+    target_path: remoteVirtualNetwork.id
+    label: peering
+
+# --- drift report ----------------------------------------------------------------------------
+implicit_types:                                # Azure-only resources that are expected, not drift
+  - microsoft.network/networkinterfaces
+  - microsoft.portal/dashboards                # App Insights' auto-created dashboard
+ignore_modify_paths:
+  - properties.template.containers.*.image     # container image tags usually move with every code deploy
+  # Read-only or defaulted properties Azure returns but templates never set (what-if reports them as Delete).
+  - properties.resolutionPolicy                # private DNS zone VNet links
+  - properties.privateDnsZoneConfigs.*         # PE DNS zone groups: ids/etags/provisioningState
+  - properties.ipVersionType
+  - properties.logAnalyticsDestinationType
+  - properties.*.retentionPolicy*
+  - properties.peeringSyncLevel
+  - properties.peerCompleteVnets
+  - properties.doNotVerifyRemoteGateways
+  - properties.remoteAddressSpace
+  - properties.remoteVirtualNetworkAddressSpace
+out_of_scope_names: []                         # name patterns that are neither drift nor drawn, e.g. "*-staging*"
+
+# --- icons (paths on https://icons.terrastruct.com/; the defaults ship with infradiag) -------
+icons:
+  _subscription: azure/General Service Icons/Subscriptions.svg
+  _resourcegroup: azure/General Service Icons/Resource Groups.svg
+  microsoft.network/virtualnetworks: azure/Networking Service Color/Virtual Networks.svg
+  microsoft.network/virtualnetworkgateways: azure/Networking Service Color/Virtual Network Gateways.svg
+  microsoft.network/privatednszones: azure/Networking Service Color/DNS Private Zones.svg
+  microsoft.network/networksecuritygroups: azure/Networking Service Color/Network Security Groups (Classic).svg
+  microsoft.network/publicipaddresses: azure/Networking Service Color/Public IP Addresses.svg
+  microsoft.sql/servers: azure/Databases Service Color/SQL Servers.svg
+  microsoft.sql/servers/databases: azure/Databases Service Color/SQL Databases.svg
+  microsoft.dbforpostgresql/flexibleservers: azure/Databases Service Color/Azure Database for PostgreSQL servers.svg
+  microsoft.keyvault/vaults: azure/Security Service Color/Key Vaults.svg
+  microsoft.storage/storageaccounts: azure/Storage Service Color/Storage Accounts.svg
+  microsoft.containerregistry/registries: azure/Container Service Color/Container Registries.svg
+  microsoft.containerservice/managedclusters: azure/Container Service Color/Kubernetes Services.svg
+  microsoft.app/containerapps: azure/Container Service Color/Container Instances.svg   # no Container Apps icon in set
+  microsoft.app/jobs: azure/Container Service Color/Container Instances.svg
+  microsoft.operationalinsights/workspaces: azure/Analytics Service Color/Log Analytics Workspaces.svg
+  microsoft.insights/components: azure/DevOps Service Color/Application Insights.svg
+  microsoft.insights/privatelinkscopes: azure/Management and Governance Service Color/Monitor.svg
+  microsoft.eventhub/namespaces: azure/Analytics Service Color/Event Hubs.svg
+  microsoft.servicebus/namespaces: azure/Integration Service Color/Azure Service Bus.svg
+  microsoft.appconfiguration/configurationstores: azure/Integration Service Color/App Configuration.svg
+  microsoft.cognitiveservices/accounts: azure/AI and ML Service Color/Cognitive Services.svg
+  microsoft.managedidentity/userassignedidentities: azure/Identity Service Color/Managed Identities.svg
+  microsoft.devopsinfrastructure/pools: azure/DevOps Service Color/Azure Pipelines.svg
+
+# --- summary diagram -------------------------------------------------------------------------
+summary:
+  groups:                                      # order = drawing order; unmatched types go to "Other"
+    Connectivity: [microsoft.network/virtualnetworkgateways, microsoft.network/dnsresolvers]
+    Networking: [microsoft.network/virtualnetworks, microsoft.network/natgateways, microsoft.network/publicipaddresses]
+    Workloads:
+      - microsoft.app/managedenvironments
+      - microsoft.app/containerapps
+      - microsoft.app/jobs
+      - microsoft.containerservice/managedclusters
+    Data & integration:
+      - microsoft.sql/servers
+      - microsoft.dbforpostgresql/flexibleservers
+      - microsoft.storage/storageaccounts
+      - microsoft.eventhub/namespaces
+      - microsoft.servicebus/namespaces
+      - microsoft.keyvault/vaults
+      - microsoft.appconfiguration/configurationstores
+      - microsoft.cognitiveservices/accounts
+    Observability: [microsoft.operationalinsights/workspaces, microsoft.insights/components, microsoft.insights/privatelinkscopes]
+    Platform:
+      - microsoft.containerregistry/registries
+      - microsoft.devopsinfrastructure/pools
+  name_overrides: {}                           # name pattern -> group (checked before types), e.g. "pip-vpn-*": Connectivity
+  hide_types:
+    - microsoft.network/privateendpoints
+    - microsoft.network/networksecuritygroups
+    - microsoft.network/privatednszones
+    - microsoft.managedidentity/userassignedidentities
+  nest_into_types: [microsoft.app/managedenvironments]   # apps/jobs drawn inside their environment
+  collapse_names: []                           # draw many same-named resources as one, e.g. {pattern: "ca-*-worker-*", label: Workers}

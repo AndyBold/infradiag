@@ -1,0 +1,32 @@
+# Install once with `pre-commit install`; run everything with
+# `pre-commit run --all-files`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # src/infradiag/icons/ holds vendored Azure SVGs from icons.terrastruct.com
+      # that ship with the package; keep them byte-identical to upstream.
+      - id: trailing-whitespace
+        exclude: ^src/infradiag/icons/
+      - id: end-of-file-fixer
+        exclude: ^src/infradiag/icons/
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      # Lint only: `ruff format` would rewrite almost every file.
+      - id: ruff-check
+
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.24.0
+    hooks:
+      - id: markdownlint-cli2
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

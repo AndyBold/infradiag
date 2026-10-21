@@ -1,0 +1,36 @@
+# infradiag config. Relative paths are relative to this file.
+#
+# Every enabled subscription your `az login` can see is drawn. List one under `subscriptions` to give it Bicep entry
+# points or narrow the resource groups read from Azure. Any other gets an Azure-only diagram of all its resource groups
+# (no what-if, no drift comparison). A listed subscription you can't see is skipped.
+
+bicep_root: .              # your Bicep project; entry point templates and parameter files are relative to it
+location: westeurope       # what-if deployment location for subscriptions that don't set their own
+views: views.yaml          # diagram and drift rules; leave out to use infradiag's built-in generic Azure rules
+# cache_dir: cache         # extract results, prices and icons (default: cache/ next to this file)
+# out_dir: out             # reports and diagrams (default: out/ next to this file)
+
+subscriptions: []
+#  - subscription: My-Subscription   # display name or ID, matched against what az login can see
+#    resource_groups: [rg-app-dev, rg-shared]   # resource groups to read from Azure; leave out to read them all
+#    # location: uksouth              # overrides the top-level location
+#    # One per subscription-scoped deployment your pipeline runs (az deployment sub create ...).
+#    # resource_groups = the RGs an entry point deploys into (used to mark results unverified if its what-if fails).
+#    entry_points:
+#      - name: main-dev
+#        deployment_name: infra-dev           # default: infra-<name>
+#        template: infra/main.bicep
+#        parameters: [infra/env/dev.bicepparam, imageTag=1.2.3]   # files or name=value, as passed to --parameters
+#        resource_groups: [rg-app-dev]
+
+# `infradiag cost`: currency for list prices, and monthly usage to assume for usage-billed resources.
+# Without usage a usage-billed resource is reported as "not estimated". First matching rule wins per key;
+# `name` is an optional fnmatch pattern. Keys are listed in the README (Cost).
+cost:
+  currency: GBP
+  usage: []
+  #  - type: microsoft.operationalinsights/workspaces
+  #    ingestion_gb: 20
+  #  - type: microsoft.sql/servers/databases
+  #    name: orders-*
+  #    vcore_hours: 150

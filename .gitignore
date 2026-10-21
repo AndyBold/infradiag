@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+cache/
+out/
+.superpowers/
+# per-project configs kept out of the repo, e.g. local/<project>/infradiag.yaml
+local/
