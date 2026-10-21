@@ -58,11 +58,15 @@ class CostConfig:
 
     def usage_for(self, resource_type: str, name: str) -> dict[str, float]:
         """Usage values for one resource; for each key the first matching rule wins."""
-        found: dict[str, float] = {}
+        return {key: rule.values[key] for key, rule in self.usage_rules_for(resource_type, name).items()}
+
+    def usage_rules_for(self, resource_type: str, name: str) -> dict[str, UsageRule]:
+        """The rule each of one resource's usage values comes from."""
+        found: dict[str, UsageRule] = {}
         for rule in self.usage:
             if fnmatchcase(resource_type.lower(), rule.type) and fnmatchcase(name.lower(), rule.name):
-                for key, value in rule.values.items():
-                    found.setdefault(key, value)
+                for key in rule.values:
+                    found.setdefault(key, rule)
         return found
 
 

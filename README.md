@@ -50,7 +50,7 @@ infradiag --config ~/diagrams/my-platform/infradiag.yaml diff
 infradiag extract [--bicep | --azure]    # re-run only what-if or only Resource Graph
 infradiag diff
 infradiag render [--view detailed|summary|all]
-infradiag cost [--actual [--from YYYY-MM-DD --to YYYY-MM-DD]] [--refresh]
+infradiag cost [--actual [--from YYYY-MM-DD --to YYYY-MM-DD]] [--detail] [--refresh]
 infradiag icons                          # download icons your views use into cache/icons/
 infradiag init [DIR] [--force]           # starter infradiag.yaml + views.yaml
 ```
@@ -137,6 +137,15 @@ cost:
 Usage keys: `ingestion_gb` (Log Analytics), `vcore_hours` (serverless SQL), `stored_gb` (blob storage), `operations` (Key Vault), `operations_millions` (Service Bus), `ingress_events_millions` (Event Hubs), `agent_hours` (Managed DevOps Pools), `data_processed_gb` (NAT gateway), `queries_millions` (private DNS zones). The report says which are missing.
 
 Add `--actual` to also show what Azure Cost Management billed, read-only, next to the estimates per resource group. The default period is the last full month; set it with `--from YYYY-MM-DD --to YYYY-MM-DD`. Actuals are in the billing currency and cover every resource group in the subscription, including Azure-managed ones (`mc_*` for AKS, `me_*` for Container Apps). They need billing read access (Cost Management Reader). A subscription that refuses says so in its report and the run carries on. Actuals are cached in `cache/<subscription id>/actual-cost/`.
+
+Add `--detail` for a per-resource breakdown under each resource group, in a collapsible section so the summary stays readable. The summary tables don't change. Each priced resource gets one row with its type, SKU and monthly subtotal, then one row per meter: the Retail Prices meter name, unit price, quantity and unit, and where the quantity comes from. That's `fixed` (730 hours, or the resource's own node count, capacity or storage size), `usage rule` (which `cost.usage` rule supplied it), or `default` (the resource doesn't say, so one unit is assumed). Parts left out of the estimate stay inline with the reason, and so do resources that aren't estimated at all.
+
+With `--actual` too, a second read-only Cost Management query breaks the billed cost down per resource and meter. It's cached beside the per-resource-group one. Billed amounts sit in an Actual column next to the estimate for each extracted resource. A billed meter shares a row with an estimated one only when both have the same meter name. Other billed meters get their own `billed:` rows; the Markdown leaves out the ones billed at zero (free grants), and the JSON keeps them. Charges that match no extracted resource are listed separately with the reason: a resource the extract doesn't have, a resource group infradiag didn't extract, or an Azure-managed resource group such as `mc_*`. For example, an AKS cluster's estimate prices its nodes, but Azure bills them in its `mc_*` group, so they show up there. `cost-report.json` carries the same breakdown under `detail`.
+
+```bash
+infradiag cost --detail                                                  # estimate per resource and meter
+infradiag cost --detail --actual --from 2026-09-01 --to 2026-09-30       # plus what was billed, side by side
+```
 
 ## Keeping project configs out of this repo
 

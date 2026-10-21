@@ -62,6 +62,8 @@ class Meter:
 class Price:
     unit_price: float
     unit: str
+    meter: str = ""    # the matched item's meterName and productName, for the detailed report
+    product: str = ""
 
 
 def _norm_unit(unit: str) -> str:
@@ -88,12 +90,16 @@ def match(items: list[dict], m: Meter) -> Price:
         raise NoPrice(f"no list price for {m.describe()} ({m.unit})")
     paid = [i for i in found if i["retailPrice"] > 0]
     if not paid:
-        return Price(0.0, found[0]["unitOfMeasure"])
+        return _price(0.0, found[0])
     first_tier = min(i["tierMinimumUnits"] for i in paid)
     prices = {i["retailPrice"] for i in paid if i["tierMinimumUnits"] == first_tier}
     if len(prices) > 1:
         raise NoPrice(f"{len(prices)} different list prices match {m.describe()}")
-    return Price(prices.pop(), paid[0]["unitOfMeasure"])
+    return _price(prices.pop(), next(i for i in paid if i["tierMinimumUnits"] == first_tier))
+
+
+def _price(unit_price: float, item: dict) -> Price:
+    return Price(unit_price, item["unitOfMeasure"], item.get("meterName") or "", item.get("productName") or "")
 
 
 def _get_json(url: str, sleep=time.sleep) -> dict:
