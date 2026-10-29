@@ -104,3 +104,10 @@ summary:
     - microsoft.managedidentity/userassignedidentities
   nest_into_types: [microsoft.app/managedenvironments]   # apps/jobs drawn inside their environment
   collapse_names: []                           # draw many same-named resources as one, e.g. {pattern: "ca-*-worker-*", label: Workers}
+
+# --- application and context views (opt-in: render --view application|context) -----------------
+applications:
+  application_tag: application
+  environment_tag: environment
+  annotations: []                             # optional: [department, owner, dataClassification]
+  overrides: []                               # ordered; first name/type/subscription selector match wins

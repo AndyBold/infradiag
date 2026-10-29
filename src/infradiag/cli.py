@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 from .actuals import Period, last_full_month, load_actuals
+from .applications import build_application
 from .azcli import AzError
 from .cache import CacheMissing
 from .config import CONFIG_NAME, DEFAULTS_DIR, Config, ConfigError, CostConfig, Target, find_config, load_config
@@ -20,14 +21,17 @@ from .diff import compute_drift, display_name, node_styles, render_azure_only, r
 from .edges import add_endpoint_edges, add_reference_edges
 from .extract_azure import extract_azure, load_arg_cache
 from .extract_bicep import extract_bicep, load_whatif_cache
+from .extract_security import extract_security, load_security
 from .icons import IconResolver, update_icons
 from .model import Graph, merge_graphs
 from .normalise import WhatIfSignals, graph_from_arg, graph_from_whatif
+from .overlays import apply_overlay
 from .prices import PriceBook, PriceError
 from .render_d2 import D2NotFound, render_d2, render_svg
 from .rules import load_rules
+from .security import SecurityEvidence, declared_security
 from .subscriptions import SubscriptionError, discover, folder_names, load_subscriptions, select, write_subscriptions
-from .views import build_detailed, build_summary
+from .views import build_detailed, build_summary, project
 
 VIEWS = {"detailed": "Detailed topology", "summary": "Architecture overview"}
 
@@ -80,6 +84,10 @@ def _extract(cfg: Target, args) -> int:
         failures = extract_bicep(cfg)
     if args.azure or both:
         print(f"Resource Graph: {extract_azure(cfg)} rows")
+    if args.security:
+        evidence = extract_security(cfg)
+        for note in evidence.coverage:
+            print(f"security: {note}", file=sys.stderr)
     if failures:
         print(f"{len(failures)} what-if failure(s): {', '.join(sorted(failures))}", file=sys.stderr)
         return 1
@@ -157,7 +165,8 @@ def _icons(rules, views_path: Path, icon_dir: Path) -> int:
     return 1 if failures else 0
 
 
-def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, sub_names: dict[str, str]) -> int:
+def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, sub_names: dict[str, str],
+            style: str = "azure", overlay: str = "none") -> int:
     bicep, azure, signals = build_graphs(cfg)
     merged = merge_graphs(bicep, azure)
     if signals.failed:
@@ -173,13 +182,56 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
         title = VIEWS[name] + suffix
         view = (build_detailed(merged, rules, title, drift_styles=styles, subscription_names=sub_names)
                 if name == "detailed" else build_summary(merged, rules, title))
-        render_svg(render_d2(view, icons), cfg.out_dir / f"{name}.d2", cfg.out_dir / f"{name}.svg")
-        print(cfg.out_dir / f"{name}.svg")
+        if overlay != "none":
+            view = apply_overlay(project(view, merged), merged, _evidence(cfg, overlay), mode=overlay, rules=rules)
+        stem = output_stem(name, style, overlay)
+        render_svg(render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg")
+        print(cfg.out_dir / f"{stem}.svg")
     if icons.missing:
         print(f"note: {len(icons.missing)} icon(s) not cached locally, fetched from the internet — "
               "run `infradiag icons` to cache them", file=sys.stderr)
     return 0
 
+
+
+def output_stem(view: str, style: str, overlay: str) -> str:
+    return view + (f"-{style}" if style != "azure" else "") + (f"-{overlay}" if overlay != "none" else "")
+
+
+def _evidence(cfg: Target, overlay: str) -> SecurityEvidence:
+    evidence = SecurityEvidence()
+    if overlay in ("identity", "all"):
+        evidence = load_security(cfg)
+        evidence.extend(declared_security(load_whatif_cache(cfg)))
+    return evidence
+
+
+def _render_application(cfg: Config, targets: list[Target], rules, args, views_path: Path,
+                        icon_dir: Path, sub_names: dict[str, str]) -> int:
+    graphs, evidence, failures = [], SecurityEvidence(), []
+    for target in targets:
+        try:
+            bicep, azure, signals = build_graphs(target)
+            graphs.extend((bicep, azure))
+            evidence.extend(_evidence(target, args.security_overlay))
+            if signals.failed:
+                failures.append(f"{target.label}: what-if failed for {', '.join(signals.failed)}")
+        except (CacheMissing, AzError) as exc:
+            failures.append(f"{target.label}: {exc}")
+    if not graphs:
+        raise CacheMissing("No selected subscription has usable resource caches; run infradiag extract")
+    graph = merge_graphs(*graphs)
+    projection = build_application(graph, rules, level=args.view, subscription_names=sub_names)
+    projection.view.notes.extend(failures)
+    view = apply_overlay(projection, graph, evidence, mode=args.security_overlay, rules=rules)
+    icons = IconResolver(views_path.parent, icon_dir)
+    stem = output_stem(args.view, args.style, args.security_overlay)
+    out = cfg.out_dir / 'applications'
+    render_svg(render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg')
+    print(out / f'{stem}.svg')
+    for note in failures:
+        print(f'warning: {note}', file=sys.stderr)
+    return 2 if failures else 0
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="infradiag", description=__doc__)
@@ -199,9 +251,13 @@ def main(argv: list[str] | None = None) -> int:
     group = ex.add_mutually_exclusive_group()
     group.add_argument("--bicep", action="store_true")
     group.add_argument("--azure", action="store_true")
+    ex.add_argument("--security", action="store_true", help="also cache visible RBAC grants and definitions (read-only)")
     sub.add_parser("diff", parents=[per_sub], help="write out/<subscription>/drift-report.md from the cache")
     rd = sub.add_parser("render", parents=[per_sub], help="write out/<subscription>/<view>.d2 and .svg from the cache")
-    rd.add_argument("--view", choices=["detailed", "summary", "all"], default="all")
+    rd.add_argument("--view", choices=["detailed", "summary", "application", "context", "all"], default="all",
+                    help="all retains detailed + summary; application/context combine selected subscriptions")
+    rd.add_argument("--style", choices=["azure", "c4"], default="azure")
+    rd.add_argument("--security-overlay", choices=["none", "identity", "network", "all"], default="none")
     co = sub.add_parser("cost", parents=[per_sub],
                         help="write out/<subscription>/cost-report.md (list-price estimates) from the cache")
     co.add_argument("--actual", action="store_true",
@@ -219,6 +275,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "extract" and args.security and args.bicep:
+            raise ConfigError("--security requires Azure extraction; cannot combine with --bicep")
         if args.command == "init":
             return _init(args.directory, args.force)
         cfg = load_config(find_config(args.config))
@@ -228,6 +286,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "icons":
             return _icons(rules, views_path, icon_dir)
         chosen, sub_names = _targets(cfg, args)
+        if args.command == "render" and args.view in ("application", "context"):
+            return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names)
         if args.command == "cost":
             period = _period(args)
             book = PriceBook(cfg.cache_dir, cfg.cost.currency, refresh=args.refresh)
@@ -241,7 +301,8 @@ def main(argv: list[str] | None = None) -> int:
                 elif args.command == "cost":
                     rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
                 else:
-                    rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names))
+                    rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
+                                         args.style, args.security_overlay))
             except (CacheMissing, AzError, PriceError) as exc:
                 # One subscription's missing cache or az failure shouldn't stop the others.
                 print(f"error: {target.label}: {exc}", file=sys.stderr)

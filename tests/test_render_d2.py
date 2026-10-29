@@ -66,3 +66,30 @@ def test_real_d2_accepts_output(tmp_path):
                 [ViewEdge("n0", "n1", "", "private"), ViewEdge("n1", "n0", "peering", "solid")])
     r.render_svg(r.render_d2(view), tmp_path / "v.d2", tmp_path / "v.svg")
     assert "<svg" in (tmp_path / "v.svg").read_text()
+
+
+def test_c4_presentation_composes_with_drift_and_overlay_annotations():
+    view = View('C4', [ViewNode('app', 'Orders', kind='application', children=[
+        ViewNode('api', 'Orders API', 'containerapps', style='azure_only', kind='component',
+                 annotations=('public access: unknown',))]), ViewNode('mi', 'mi-orders', kind='identity')],
+        [ViewEdge('api', 'mi', 'attachment', 'dashed', 'attachment')], ['Coverage unknown'])
+    text = r.render_d2(view, style='c4')
+    assert '[Application]' in text
+    assert 'class: azure_only' in text
+    assert 'public access: unknown' in text
+    assert 'Coverage unknown' in text
+    assert 'Legend' in text
+    assert '#7b1fa2' in text
+
+
+def test_c4_long_boundary_and_permission_labels_are_wrapped():
+    scope = '/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-orders/providers/Microsoft.KeyVault/vaults/orders'
+    view = View('T', [ViewNode('a', 'Orders', 'production | A subscription with a very long display name',
+                               children=[ViewNode('api', 'API')], kind='application'),
+                      ViewNode('mi', 'mi-orders', kind='identity')],
+                [ViewEdge('mi', 'api', 'Secrets User; scope: ' + scope, kind='grant')])
+    text = r.render_d2(view, style='c4')
+    assert 'production | A subscription with a very long display name' not in text
+    assert scope not in text
+    assert 'Secrets User' in text
+    assert 'width:' in text
