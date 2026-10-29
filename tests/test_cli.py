@@ -333,3 +333,43 @@ def test_cost_period_needs_actual_and_must_be_ordered(tmp_path, capsys):
     assert "--from/--to need --actual" in capsys.readouterr().err
     assert cli.main(args + ["cost", "--actual", "--from", "2026-09-30", "--to", "2026-09-01"]) == 2
     assert "is after --to" in capsys.readouterr().err
+
+
+def test_c4_application_view_combines_only_selected_subscriptions_offline(tmp_path, monkeypatch):
+    args = setup(tmp_path, test_sub=True)
+    capture_d2(monkeypatch)
+    assert cli.main(args + ['render', '--view', 'application', '--style', 'c4', '--security-overlay', 'identity',
+                            '--subscription', SUB]) == 0
+    output = tmp_path / 'out/applications/application-c4-identity.d2'
+    text = output.read_text()
+    assert 'kv-app-dev-weu' in text
+    assert 'kv-test' not in text
+    assert 'Security not extracted' in text
+    assert '[Application]' in text
+    assert not (tmp_path / DEV_OUT / 'detailed.d2').exists()
+
+
+def test_render_variant_does_not_overwrite_default(tmp_path, monkeypatch):
+    args = setup(tmp_path)
+    capture_d2(monkeypatch)
+    assert cli.main(args + ['render']) == 0
+    default = (tmp_path / DEV_OUT / 'detailed.d2').read_text()
+    assert cli.main(args + ['render', '--view', 'detailed', '--style', 'c4', '--security-overlay', 'network']) == 0
+    assert (tmp_path / DEV_OUT / 'detailed-c4-network.d2').exists()
+    assert (tmp_path / DEV_OUT / 'detailed.d2').read_text() == default
+
+
+def test_security_extract_is_opt_in_and_rejects_bicep_only(tmp_path, monkeypatch, capsys):
+    from infradiag.security import SecurityEvidence
+    args = setup(tmp_path)
+    monkeypatch.setattr(cli, 'discover', lambda: [Subscription(SUB, 'Contoso-Dev')])
+    monkeypatch.setattr(cli, 'extract_azure', lambda cfg: 0)
+    def security(cfg):
+        return SecurityEvidence(coverage=['Incomplete ancestor grant coverage: Forbidden'])
+    monkeypatch.setattr(cli, 'extract_security', security)
+    assert cli.main(args + ['extract', '--azure', '--security']) == 0
+    assert 'Incomplete ancestor' in capsys.readouterr().err
+    monkeypatch.setattr(cli, 'extract_security', lambda cfg: (_ for _ in ()).throw(AssertionError('unexpected security read')))
+    assert cli.main(args + ['extract', '--azure']) == 0
+    assert cli.main(args + ['extract', '--bicep', '--security']) == 2
+    assert '--security' in capsys.readouterr().err

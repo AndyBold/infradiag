@@ -23,7 +23,7 @@ def build_query(cfg: Target) -> str:
     return (
         "resources"
         f" | where {where}"
-        " | project id, name, type, resourceGroup, subscriptionId, location, kind, managedBy, sku, identity, properties"
+        " | project id, name, type, resourceGroup, subscriptionId, location, kind, managedBy, sku, tags, identity, properties"
         " | order by id asc"
     )
 

@@ -1,0 +1,165 @@
+[
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders",
+    "properties": {
+      "principalId": "shared-orders-principal"
+    }
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-data/providers/Microsoft.KeyVault/vaults/orders-vault",
+    "tags": {
+      "application": "Data",
+      "environment": "dev",
+      "dataClassification": "Confidential"
+    },
+    "properties": {
+      "publicNetworkAccess": "Enabled"
+    }
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/orders-vnet",
+    "properties": {
+      "subnets": [
+        {
+          "name": "apps",
+          "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/orders-vnet/subnets/apps",
+          "properties": {
+            "networkSecurityGroup": {
+              "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/orders-nsg"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/networkSecurityGroups/orders-nsg"
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/privateEndpoints/orders-vault-pe",
+    "properties": {
+      "subnet": {
+        "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/orders-vnet/subnets/apps"
+      },
+      "privateLinkServiceConnections": [
+        {
+          "properties": {
+            "privateLinkServiceId": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-data/providers/Microsoft.KeyVault/vaults/orders-vault"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-dev/providers/Microsoft.App/containerApps/orders-api-dev",
+    "tags": {
+      "application": "Orders",
+      "environment": "dev",
+      "owner": "Team Orders",
+      "department": "Engineering"
+    },
+    "identity": {
+      "userAssignedIdentities": {
+        "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders": {
+          "principalId": "shared-orders-principal"
+        }
+      }
+    },
+    "properties": {
+      "configuration": {
+        "secrets": [
+          {
+            "name": "vault",
+            "identity": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders",
+            "keyVaultUrl": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-data/providers/Microsoft.KeyVault/vaults/orders-vault"
+          }
+        ],
+        "subnetId": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/orders-vnet/subnets/apps"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-dev/providers/Microsoft.App/jobs/orders-worker-dev",
+    "tags": {
+      "application": "Orders",
+      "environment": "dev",
+      "owner": "Team Orders",
+      "department": "Engineering"
+    },
+    "identity": {
+      "userAssignedIdentities": {
+        "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders": {
+          "principalId": "shared-orders-principal"
+        }
+      }
+    },
+    "properties": {
+      "configuration": {
+        "secrets": [
+          {
+            "name": "vault",
+            "identity": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders",
+            "keyVaultUrl": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-data/providers/Microsoft.KeyVault/vaults/orders-vault"
+          }
+        ],
+        "subnetId": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/orders-vnet/subnets/apps"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-production/providers/Microsoft.App/containerApps/orders-api-production",
+    "tags": {
+      "application": "Orders",
+      "environment": "production",
+      "owner": "Team Orders",
+      "department": "Engineering"
+    },
+    "identity": {
+      "userAssignedIdentities": {
+        "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders": {
+          "principalId": "shared-orders-principal"
+        }
+      }
+    },
+    "properties": {
+      "configuration": {
+        "secrets": [
+          {
+            "name": "vault",
+            "identity": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders",
+            "keyVaultUrl": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-data/providers/Microsoft.KeyVault/vaults/orders-vault"
+          }
+        ],
+        "subnetId": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/orders-vnet/subnets/apps"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-production/providers/Microsoft.App/jobs/orders-worker-production",
+    "tags": {
+      "application": "Orders",
+      "environment": "production",
+      "owner": "Team Orders",
+      "department": "Engineering"
+    },
+    "identity": {
+      "userAssignedIdentities": {
+        "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders": {
+          "principalId": "shared-orders-principal"
+        }
+      }
+    },
+    "properties": {
+      "configuration": {
+        "secrets": [
+          {
+            "name": "vault",
+            "identity": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-shared/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders",
+            "keyVaultUrl": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-data/providers/Microsoft.KeyVault/vaults/orders-vault"
+          }
+        ],
+        "subnetId": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/orders-vnet/subnets/apps"
+      }
+    }
+  }
+]

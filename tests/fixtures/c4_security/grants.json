@@ -1,0 +1,17 @@
+[
+  {
+    "principal_id": "shared-orders-principal",
+    "role_id": "secrets-user",
+    "role_name": "Key Vault Secrets User",
+    "scope": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourcegroups/rg-data/providers/microsoft.keyvault/vaults/orders-vault",
+    "condition": "@Resource[tag] == permitted",
+    "source": "azure"
+  },
+  {
+    "principal_id": "shared-orders-principal",
+    "role_id": "reader",
+    "role_name": "Reader",
+    "scope": "/subscriptions/0a1b2c3d-0000-4000-8000-000000000001/resourceGroups/rg-data",
+    "source": "bicep"
+  }
+]

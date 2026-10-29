@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from .ids import normalise_id, parse_id
@@ -47,6 +48,7 @@ def expand_inline_children(graph: Graph, node: Node) -> None:
                 name=name,
                 properties=child.get("properties") or {},
                 sources=set(node.sources),
+                metadata={source: deepcopy(child) for source in node.sources},
                 entry_points=set(node.entry_points),
             ))
 
@@ -102,6 +104,9 @@ def graph_from_whatif(results: dict[str, dict]) -> tuple[Graph, WhatIfSignals]:
                 name=after.get("name"),
                 properties=after.get("properties") or {},
                 sources={BICEP},
+                tags=deepcopy(after.get("tags") or {}),
+                identity=deepcopy(after.get("identity") or {}),
+                metadata={BICEP: deepcopy(after)},
                 entry_points={entry},
             ))
             expand_inline_children(graph, node)
@@ -122,6 +127,9 @@ def graph_from_arg(rows: list[dict]) -> Graph:
             name=row.get("name"),
             properties=row.get("properties") or {},
             sources={AZURE},
+            tags=deepcopy(row.get("tags") or {}),
+            identity=deepcopy(row.get("identity") or {}),
+            metadata={AZURE: deepcopy(row)},
             managed_by=row.get("managedBy") or None,
         ))
         expand_inline_children(graph, node)
