@@ -100,8 +100,8 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
         kind = scope_kind(scope)
         name, ptype = principals.get(g.principal_id) or (
             'unresolved principal', PRINCIPAL_TYPES.get(g.principal_type.casefold(), g.principal_type) or 'unresolved')
-        common = dict(principal_name=name, principal_type=ptype, principal_id=g.principal_id, role=g.role_name,
-                      scope=scope, scope_kind=kind, source=g.source, condition=g.condition)
+        common = {'principal_name': name, 'principal_type': ptype, 'principal_id': g.principal_id, 'role': g.role_name,
+                  'scope': scope, 'scope_kind': kind, 'source': g.source, 'condition': g.condition}
         if kind == 'resource':
             node = graph.nodes.get(scope)
             label = node.name if node else scope.rsplit('/', 1)[-1]
@@ -122,7 +122,7 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
             label, sub = scope.rsplit('/', 1)[-1], g.subscription.lower()
         else:
             label, sub = 'tenant root', g.subscription.lower()
-        covered = Counter()
+        covered: dict[str, set[str]] = {}
         for rid in graph.nodes:
             if not visible(rid):
                 continue
@@ -130,9 +130,9 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
             inside = (n.subscription.lower() == sub if kind in ('subscription', 'management group', 'tenant')
                       else scope_contains(scope, rid))
             if inside:
-                covered[env_of(rid)] += 1
-        for env, count in sorted(covered.items()) or [('', 0)]:
-            rows.append(AccessRow(resource=label, resource_type=kind, environment=env, covers=count, **common))
+                covered.setdefault(env_of(rid), set()).add(projection.resources[rid])
+        for env, keys in sorted(covered.items()) or [('', set())]:
+            rows.append(AccessRow(resource=label, resource_type=kind, environment=env, covers=len(keys), **common))
     return sorted(rows, key=lambda r: (r.environment.casefold(), r.principal_name.casefold(), r.role.casefold(),
                                        r.scope, r.source, r.condition))
 

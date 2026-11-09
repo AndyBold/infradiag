@@ -53,7 +53,7 @@ def build_application(graph: Graph, rules: Rules, *, level: str,
         boundary = ViewNode(f'a{i}', app, f'{env} | {scope_label}' + (' | shared service' if shared else '') +
                             ''.join('\n' + x for x in annotations), kind='system' if level == 'context' else 'application',
                             resource_ids=tuple(n.id for n in members) if level == 'context' else (),
-                            environment='' if app == EXTERNAL else env)
+                            environment='' if all(STUB in n.flags for n in members) else env)
         roots.append(boundary)
         components = defaultdict(list)
         for n in members:

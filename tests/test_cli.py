@@ -421,3 +421,17 @@ def test_identity_overlay_writes_the_access_table_for_non_application_views_too(
     assert cli.main(setup(tmp_path) + ['render', '--view', 'summary', '--security-overlay', 'identity']) == 0
     assert (tmp_path / DEV_OUT / 'summary-identity-access.html').exists()
     assert (tmp_path / DEV_OUT / 'summary-identity-access.csv').exists()
+
+
+def test_split_removes_superseded_whole_view_and_stale_environment_files(tmp_path, monkeypatch):
+    args = setup(tmp_path)
+    capture_d2(monkeypatch)
+    base = args + ['render', '--view', 'application', '--subscription', SUB]
+    assert cli.main(base) == 0
+    out = tmp_path / 'out/applications'
+    assert (out / 'application.d2').exists()
+    (out / 'application.split.json').write_text('["application-gone.svg"]')
+    (out / 'application-gone.svg').write_text('old')
+    assert cli.main(base + ['--split', 'environment']) == 0
+    assert not (out / 'application.d2').exists() and not (out / 'application-gone.svg').exists()
+    assert (out / 'application-unspecified.d2').exists()

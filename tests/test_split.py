@@ -32,7 +32,7 @@ def fixture():
     api0, api1, vault, ext = api0.lower(), api1.lower(), vault.lower(), ext.lower()
     graph.edges |= {Edge(api0, vault, REF, 'ref'), Edge(api0, api1, REF, 'ref'), Edge(api1, vault, REF, 'ref'),
                     Edge(api1, ext, REF, 'ref')}
-    return graph, dict(mi=mi.lower(), api0=api0, api1=api1, vault=vault, ext=ext)
+    return graph, {'mi': mi.lower(), 'api0': api0, 'api1': api1, 'vault': vault, 'ext': ext}
 
 
 def grants(ids):
@@ -208,3 +208,22 @@ def test_index_links_each_environment():
     page = render_index('Idx', [IndexEntry('All', 9, 8, '', '', 'a-access.html', 5),
                                IndexEntry('dev0', 3, 2, 'x-dev0.svg', 'x-dev0.html', 'x-dev0-access.html', 2)], ['note'])
     assert 'x-dev0.svg' in page and 'x-dev0.html' in page and 'access table (2)' in page and not re.search(r'https?://', page)
+
+
+def test_a_real_application_named_like_the_external_root_keeps_its_environment():
+    graph, _ids = fixture()
+    for n in graph.nodes.values():
+        if n.name == 'vault':
+            n.tags['application'] = EXTERNAL
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    assert 'shared' in environments(p.view)
+
+
+def test_elements_covered_counts_distinct_drawn_elements_not_resources():
+    graph, ids = fixture()
+    rules = Rules(applications={'overrides': [{'match': {'name': 'api*'}, 'application': 'Orders', 'environment': 'dev0',
+                                               'component': 'api'}]})
+    p = build_application(graph, rules, level='application', subscription_names={})
+    rows = build_access_rows(p, graph, grants(ids), rules, {})
+    reader = [r for r in rows if r.role == 'Reader' and r.scope_kind == 'subscription' and r.environment == 'dev0']
+    assert [r.covers for r in reader] == [1]  # api0 and api1 are one drawn component

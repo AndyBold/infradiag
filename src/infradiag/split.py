@@ -106,7 +106,7 @@ def split_by_environment(view: View) -> list[EnvironmentView]:
         inside = {k for k, r in roots.items() if r.environment.casefold() == env.casefold()}
         stubs: dict[str, ViewNode] = {}
         redirect: dict[str, str] = {}
-        def outside(key: str) -> str:
+        def outside(key: str, redirect=redirect, stubs=stubs) -> str:
             if key not in redirect:
                 stub = _anchor(key, roots)
                 stubs.setdefault(stub.key, stub)
