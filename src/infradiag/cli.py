@@ -31,7 +31,7 @@ from .normalise import WhatIfSignals, graph_from_arg, graph_from_whatif
 from .overlays import apply_overlay
 from .prices import PriceBook, PriceError
 from .progress import Progress
-from .render_d2 import D2NotFound, render_d2, render_svg, view_size
+from .render_d2 import D2NotFound, add_edge_tooltips, edge_tooltips, render_d2, render_svg, view_size
 from .rules import load_rules
 from .security import SecurityEvidence, declared_security
 from .split import split_by_environment
@@ -189,6 +189,7 @@ def _d2_svg(progress: Progress, text: str, d2_file: Path, svg_file: Path, view: 
     render_svg(text, d2_file, svg_file, timeout=timeout,
                on_tick=lambda elapsed: progress.line(f"d2: still laying out {svg_file.name} ({elapsed / 60:.0f} min elapsed) ..."))
     progress.line(f"d2: {svg_file.name} done in {time.monotonic() - started:.0f}s")
+    add_edge_tooltips(svg_file, edge_tooltips(view))
 
 
 def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, sub_names: dict[str, str],

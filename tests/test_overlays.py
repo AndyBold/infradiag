@@ -27,8 +27,10 @@ def test_identity_grants_retain_provenance_scope_condition_and_do_not_claim_usag
     grants = [Grant('p', 'role', 'Secrets User', f'/subscriptions/{SUB}', 'x', source) for source in ('azure', 'bicep')]
     view = apply_overlay(projection, graph, SecurityEvidence(grants=grants), mode='identity', rules=rules)
     labels = '\n'.join(e.label for e in view.edges)
-    assert 'mi-orders' in labels and 'Secrets User' in labels
-    assert 'subscription scope' in labels and 'condition: x' in labels
+    assert 'Secrets User' in labels and 'mi-orders' not in '\n'.join(e.label for e in view.edges if e.kind == 'grant')
+    assert 'subscription scope' in labels and 'conditional' in labels and 'condition: x' not in labels
+    (grant,) = [e for e in view.edges if e.kind == 'grant']
+    assert 'mi-orders' in grant.tooltip and 'Condition: x' in grant.tooltip and 'Roles: Secrets User' in grant.tooltip
     assert 'azure' in labels and 'bicep' in labels
     assert 'configured use' not in labels
     assert 'attachment' in labels
@@ -294,7 +296,7 @@ def test_grants_from_either_source_reach_the_same_identity_by_principal_id():
     view = application_overlay(graph, grants)
     (node,) = identity_nodes(view)
     (edge,) = [e for e in view.edges if e.kind == 'grant']
-    assert edge.source == node.key and 'mi-orders' in edge.label and 'azure, bicep' in edge.label
+    assert edge.source == node.key and 'mi-orders' in edge.tooltip and 'azure, bicep' in edge.label
 
 
 def test_unresolved_principal_granted_in_both_sources_is_one_node():
@@ -324,3 +326,39 @@ def test_identity_bicep_references_but_does_not_declare_keeps_bicep_provenance()
     graph, _mi = declared_and_observed(in_bicep=False)
     (node,) = identity_nodes(application_overlay(graph))
     assert node.sublabel == 'azure, bicep | principal: p-1'
+
+
+def test_grant_label_omits_the_scope_path_and_the_tooltip_lists_every_scope():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    scopes = [f'/subscriptions/{SUB}', '/providers/Microsoft.Management/managementGroups/root']
+    grants = [Grant('u', f'r{i}', f'Role {i}', scope, subscription=SUB) for i, scope in enumerate(scopes)]
+    view = apply_overlay(p, graph, SecurityEvidence(grants=grants), mode='identity', rules=Rules())
+    (edge,) = grant_edges(view)
+    assert '/subscriptions/' not in edge.label and 'scope:' not in edge.label and 'more' not in edge.label.splitlines()[1]
+    assert 'subscription scope / management group scope' in edge.label
+    assert all(s in edge.tooltip for s in scopes)
+
+
+def test_single_scope_tooltip_is_that_scope():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', f'/subscriptions/{SUB}')]),
+                         mode='identity', rules=Rules())
+    (edge,) = grant_edges(view)
+    assert edge.tooltip.splitlines()[1:] == ['Roles: Reader', f'Scope: /subscriptions/{SUB}']
+
+
+def test_long_condition_unresolved_role_paths_and_extra_roles_move_to_the_tooltip():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    role_path = f'/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385'
+    cond = 'ForAnyOfAnyValues:GuidEquals {' + ', '.join(f'guid-{i}' for i in range(80)) + '}'
+    grants = [Grant('u', 'r1', 'Reader', f'/subscriptions/{SUB}', condition=cond),
+              Grant('u', 'r2', role_path, f'/subscriptions/{SUB}')] + [
+        Grant('u', f'r{i}', f'Role {i}', f'/subscriptions/{SUB}') for i in range(3, 8)]
+    view = apply_overlay(p, graph, SecurityEvidence(grants=grants), mode='identity', rules=Rules())
+    (edge,) = grant_edges(view)
+    assert len(edge.label) < 120 and 'guid-1' not in edge.label and SUB not in edge.label
+    assert 'Reader, acdd72a7-3385, Role 3 +4 more' in edge.label and 'conditional' in edge.label
+    assert 'Role 7' in edge.tooltip and role_path in edge.tooltip and cond in edge.tooltip

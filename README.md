@@ -229,8 +229,10 @@ explicit shared application boundary, retaining dependencies to consuming applic
 
 `--security-overlay none|identity|network|all` defaults to `none` and works with either
 style and every view. Purple relationships distinguish **identity attachment**, explicit
-**configured use**, and **RBAC grants**. Role labels retain named identity, role, scope,
-conditions and Azure/Bicep provenance. Aggregated views retain workload names in security
+**configured use**, and **RBAC grants**. A grant edge's label is short: the roles (first three), the
+Azure/Bicep provenance and the scope kind, plus `conditional` when a condition applies. The rest is on
+hover (in the SVG and in the pan/zoom viewer): the identity and target names, every role, every scope
+the edge merges, and the full condition text. Aggregated views retain workload names in security
 relationships or annotations when the endpoints collapse into the same visible element.
 An endpoint reference by itself does not establish which identity authenticates a call.
 Each identity is drawn once: the Bicep and Azure copies of a managed identity are matched by resource ID, and grants

@@ -38,6 +38,8 @@ class ViewEdge:
     label: str = ""
     style: str = "solid"
     kind: str = "dependency"
+    # Shown on hover rather than drawn on the label (the SVG gets it as a <title>; see render_d2.add_edge_tooltips).
+    tooltip: str = ""
 
 
 @dataclass
