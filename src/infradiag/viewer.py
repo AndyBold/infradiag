@@ -27,7 +27,8 @@ _TEMPLATE = """<!DOCTYPE html>
   #stage { position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab; outline: none; }
   #stage.dragging { cursor: grabbing; }
   /* will-change keeps the diagram on its own GPU layer from the start, so the first gesture does not pay for promoting it. */
-  #stage > svg { width: 100%; height: 100%; display: block; transform-origin: 0 0; will-change: transform; }
+  /* The svg is sized and positioned by the script: larger than the viewport, so the layer holds off-screen content too. */
+  #stage > svg { position: absolute; display: block; will-change: transform; }
   #controls { position: fixed; top: 10px; right: 10px; z-index: 10; display: flex; gap: 4px; align-items: center;
               background: rgba(255,255,255,.92); border: 1px solid #bbb; border-radius: 6px; padding: 4px; }
   #controls button { font-size: 16px; min-width: 32px; height: 32px; cursor: pointer; border: 1px solid #999;
@@ -54,7 +55,7 @@ __LOGIC__
 </script>
 <script>
 (function () {
-  var L = ViewerLogic, SETTLE_MS = 150;
+  var L = ViewerLogic, SETTLE_MS = 150, OVERSCAN = 0.5;  // draw half a viewport of margin on every side
   var stage = document.getElementById('stage');
   var svg = stage.querySelector('svg');
   var label = document.getElementById('zoom');
@@ -80,7 +81,13 @@ __LOGIC__
   // Crisp render: point the viewBox at the live camera and drop the transform that was standing in for it.
   function bake() {
     base = cam;
-    svg.setAttribute('viewBox', L.viewBoxOf(cam, W, H).join(' '));
+    var o = L.overscanBox(cam, W, H, OVERSCAN);
+    svg.setAttribute('viewBox', o.viewBox.join(' '));
+    svg.style.left = o.left + 'px';
+    svg.style.top = o.top + 'px';
+    svg.style.width = o.width + 'px';
+    svg.style.height = o.height + 'px';
+    svg.style.transformOrigin = o.originX + 'px ' + o.originY + 'px';
     svg.style.transform = '';
   }
   var settler = L.createSettler(bake, SETTLE_MS);

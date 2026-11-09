@@ -44,6 +44,17 @@ var ViewerLogic = (function () {
     return [cam.x, cam.y, W / cam.k, H / cam.k];
   }
 
+  /* The SVG element is drawn larger than the viewport, by `margin` (a fraction of it) on every side, so the layer that
+   * gestures move already holds the diagram just off-screen: panning and zooming out reveal drawn content, not blank.
+   * Returns the element's box relative to the viewport, its viewBox, and the viewport's origin inside the element
+   * (the transform-origin, so scaling is about the viewport's top-left like the camera maths assumes). */
+  function overscanBox(cam, W, H, margin) {
+    var mx = Math.round(W * margin), my = Math.round(H * margin);
+    var w = W + 2 * mx, h = H + 2 * my;
+    return { left: -mx, top: -my, width: w, height: h, originX: mx, originY: my,
+             viewBox: viewBoxOf({ x: cam.x - mx / cam.k, y: cam.y - my / cam.k, k: cam.k }, w, h) };
+  }
+
   /* Zoom factor for a wheel event. Pinch gestures arrive as ctrl+wheel with small deltas, so they get more gain. */
   function wheelFactor(deltaY, deltaMode, ctrlKey) {
     var px = deltaMode === 1 ? deltaY * 16 : deltaMode === 2 ? deltaY * 400 : deltaY;
@@ -66,7 +77,7 @@ var ViewerLogic = (function () {
 
   return {
     MIN_SCALE: MIN_SCALE, MAX_SCALE: MAX_SCALE, clampScale: clampScale, zoomAt: zoomAt, panBy: panBy,
-    fitCamera: fitCamera, actualCamera: actualCamera, relTransform: relTransform, viewBoxOf: viewBoxOf,
+    fitCamera: fitCamera, actualCamera: actualCamera, relTransform: relTransform, viewBoxOf: viewBoxOf, overscanBox: overscanBox,
     wheelFactor: wheelFactor, createSettler: createSettler
   };
 })();

@@ -80,3 +80,11 @@ def test_hover_titles_are_left_to_the_svg():
     svg = SVG.replace("<text>", "<g><title>hover me</title><path d='M0 0' style='stroke:transparent;stroke-width:12'/></g><text>")
     text = viewer.viewer_html(svg, "t")
     assert "<title>hover me</title>" in text and "stroke-width:12" in text
+
+
+def test_svg_layer_is_larger_than_the_viewport_so_panning_and_zooming_out_do_not_show_blank():
+    text = viewer.viewer_html(SVG, "t")
+    assert "OVERSCAN = 0.5" in text and "L.overscanBox(cam, W, H, OVERSCAN)" in text
+    assert "svg.style.transformOrigin" in text
+    assert "#stage > svg { position: absolute;" in text  # not width/height 100%: the script sizes it past the viewport
+    assert "#stage { position: fixed; inset: 0; overflow: hidden;" in text  # the stage still clips to the window

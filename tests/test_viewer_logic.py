@@ -86,3 +86,13 @@ def test_settler_runs_once_after_the_last_poke():
       return { before, runs, pendingAfter, pendingFlushed: s.pending() };
     })()""")
     assert out == {"before": [], "runs": [260, 260], "pendingAfter": False, "pendingFlushed": False}
+
+
+def test_overscan_draws_the_diagram_beyond_every_edge_of_the_viewport():
+    box = run("L.overscanBox({x: 100, y: 50, k: 2}, 800, 600, 0.5)")
+    assert (box["left"], box["top"], box["width"], box["height"]) == (-400, -300, 1600, 1200)
+    assert (box["originX"], box["originY"]) == (400, 300)
+    # viewBox starts half a viewport (in user units) before the camera and spans twice the viewport
+    assert box["viewBox"] == [100 - 400 / 2, 50 - 300 / 2, 1600 / 2, 1200 / 2]
+    # so the viewport's own top-left, at element offset (originX, originY), is still the camera origin
+    assert box["viewBox"][0] + box["originX"] / 2 == 100
