@@ -400,6 +400,8 @@ def test_split_environment_writes_a_diagram_and_table_per_environment_and_an_ind
     assert 'application-identity-access.html' in names and 'application-identity-access.csv' in names
     assert 'application-identity-unspecified.d2' in names and 'application-identity-unspecified-access.html' in names
     index = (out / 'application-identity-index.html').read_text()
+    assert (out / 'application-identity-unspecified.html').exists()  # the viewer
+    assert 'application-identity-unspecified.html' in index
     assert 'application-identity-unspecified.svg' in index and 'application-identity-access.html' in index
     assert 'https://' not in index
 
@@ -433,5 +435,5 @@ def test_split_removes_superseded_whole_view_and_stale_environment_files(tmp_pat
     (out / 'application.split.json').write_text('["application-gone.svg"]')
     (out / 'application-gone.svg').write_text('old')
     assert cli.main(base + ['--split', 'environment']) == 0
-    assert not (out / 'application.d2').exists() and not (out / 'application-gone.svg').exists()
+    assert not (out / 'application.html').exists() and not (out / 'application.d2').exists() and not (out / 'application-gone.svg').exists()
     assert (out / 'application-unspecified.d2').exists()

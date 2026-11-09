@@ -292,7 +292,7 @@ def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: 
     if not parts:
         raise ConfigError("--split environment: the view has no environment containers to split")
     manifest = out / f"{stem}.split.json"
-    stale = [out / f"{stem}.d2", out / f"{stem}.svg"]  # the whole-view diagram this split replaces
+    stale = [out / f"{stem}.d2", out / f"{stem}.svg", out / f"{stem}.html"]  # the whole-view diagram this split replaces
     if manifest.exists():
         try:
             stale += [out / name for name in json.loads(manifest.read_text())]
@@ -307,14 +307,15 @@ def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: 
         _d2_svg(progress, render_d2(part.view, icons, style=args.style), out / f"{name}.d2", out / f"{name}.svg",
                 part.view, args.d2_timeout)
         print(out / f"{name}.svg")
-        written += [f"{name}.d2", f"{name}.svg"]
+        print(write_viewer(out / f"{name}.svg"))
+        written += [f"{name}.d2", f"{name}.svg", f"{name}.html"]
         table, count = "", 0
         if rows is not None:
             mine = for_environment(rows, part.environment)
             table = write_access(mine, out / name, f"{part.view.title}: access", back=f"{stem}-index.html")[0].name
             count = len(mine)
             written += [f"{name}-access.html", f"{name}-access.csv"]
-        viewer = f"{name}.html" if (out / f"{name}.html").exists() else ""
+        viewer = f"{name}.html"
         entries.append(IndexEntry(part.environment, *view_size(part.view), f"{name}.svg", viewer, table, count))
     for path in stale:
         if path.name not in written:
