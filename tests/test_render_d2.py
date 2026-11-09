@@ -136,3 +136,33 @@ def test_render_svg_turns_a_killed_d2_into_an_actionable_error(tmp_path, monkeyp
     monkeypatch.setattr(r.subprocess, "run", run)
     with pytest.raises(RuntimeError, match="gave up .* after 30s"):
         r.render_svg("x", tmp_path / "v.d2", tmp_path / "v.svg", timeout=30)
+
+
+TIP_VIEW = View("T", [ViewNode("c0", "rg", children=[ViewNode("n0", "a"), ViewNode("n1", "b")]), ViewNode("mi", "mi")],
+                [ViewEdge("mi", "n0", "Reader", kind="grant", tooltip="Scope: /subscriptions/x & <y>"),
+                 ViewEdge("mi", "n0", "Owner", kind="grant", tooltip="Scope: /subscriptions/z"),
+                 ViewEdge("n0", "n1", "dependency")])
+
+
+def test_edge_tooltips_name_connections_the_way_d2_does():
+    assert r.edge_tooltips(TIP_VIEW) == {"(mi -> c0.n0)[0]": "Scope: /subscriptions/x & <y>",
+                                         "(mi -> c0.n0)[1]": "Scope: /subscriptions/z"}
+
+
+@pytest.mark.skipif(shutil.which("d2") is None, reason="d2 not installed")
+@pytest.mark.parametrize("style", ["azure", "c4"])
+def test_edge_tooltips_land_as_titles_on_the_right_edges_in_real_d2_output(tmp_path, style):
+    svg = tmp_path / "t.svg"
+    r.render_svg(r.render_d2(TIP_VIEW, style=style), tmp_path / "t.d2", svg, timeout=60)
+    assert r.add_edge_tooltips(svg, r.edge_tooltips(TIP_VIEW)) == 2
+    text = svg.read_text()
+    assert "<title>Scope: /subscriptions/x &amp; &lt;y&gt;</title>" in text
+    assert "<title>Scope: /subscriptions/z</title>" in text
+    assert 'pointer-events="stroke"' in text
+    assert "xml" in text[:6] or text.lstrip().startswith("<")
+
+
+def test_add_edge_tooltips_skips_connections_d2_did_not_draw(tmp_path):
+    svg = tmp_path / "t.svg"
+    svg.write_text("<svg/>")
+    assert r.add_edge_tooltips(svg, {"(a -> b)[0]": "x"}) == 0 and svg.read_text() == "<svg/>"

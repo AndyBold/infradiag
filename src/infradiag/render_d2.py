@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import re
 import shutil
 import subprocess
 import threading
@@ -12,6 +14,7 @@ from pathlib import Path
 from textwrap import fill
 from typing import Self
 from urllib.parse import quote
+from xml.sax.saxutils import escape
 
 from .views import View, ViewNode
 
@@ -117,6 +120,55 @@ def render_d2(view: View, icon_href: Callable[[str], str] = icon_url, *, style: 
         legend += "".join("\n\n" + fill(note, 110) for note in dict.fromkeys(view.notes))
         lines.append(f'legend: {_q(legend)} {{shape: text; style.font-size: 14}}')
     return "\n".join(lines) + "\n"
+
+
+def edge_tooltips(view: View) -> dict[str, str]:
+    """d2 connection id -> hover text, for the edges that carry a tooltip.
+
+    d2 0.9 accepts `tooltip` on a connection but draws nothing for it in SVG output (only shapes get a tooltip icon
+    and <title>), so add_edge_tooltips injects them after layout. d2 names a connection `(a.b -> c.d)[n]`, n counting
+    the edges between the same two paths in source order."""
+    paths: dict[str, str] = {}
+    def walk(nodes: list[ViewNode], parent: str) -> None:
+        for node in nodes:
+            paths[node.key] = f"{parent}.{node.key}" if parent else node.key
+            walk(node.children, paths[node.key])
+    walk(view.nodes, "")
+    seen: dict[tuple[str, str], int] = {}
+    out: dict[str, str] = {}
+    for edge in view.edges:
+        pair = (paths[edge.source], paths[edge.target])
+        n = seen[pair] = seen.get(pair, -1) + 1
+        if edge.tooltip:
+            out[f"({pair[0]} -> {pair[1]})[{n}]"] = edge.tooltip
+    return out
+
+
+HIT_WIDTH = 16  # px: an invisible stroke under each tooltip edge, so the 2px line is easy to hover
+
+
+def add_edge_tooltips(svg_file: Path, tooltips: dict[str, str]) -> int:
+    """Give each connection in tooltips a <title> (the browser's native hover text) and a wide invisible hover target.
+    Returns how many were added; connections d2 did not draw are skipped."""
+    if not tooltips:
+        return 0
+    svg = svg_file.read_text()
+    added = 0
+    for conn_id, text in tooltips.items():
+        # d2 labels each connection group class with the base64 of its id, XML-escaped first ("->" is "-&gt;").
+        key = base64.b64encode(escape(conn_id).encode()).decode()
+        group = re.compile(r'<g class="' + re.escape(key) + r'">(.*?)</g>', re.DOTALL)
+        m = group.search(svg)
+        if not m:
+            continue
+        body = m.group(1)
+        path = re.search(r'<path d="([^"]+)"', body)
+        hit = (f'<path d="{path.group(1)}" fill="none" stroke="transparent" stroke-width="{HIT_WIDTH}" '
+               'pointer-events="stroke"/>') if path else ""
+        svg = svg[:m.start(1)] + f"<title>{escape(text)}</title>" + body + hit + svg[m.end(1):]
+        added += 1
+    svg_file.write_text(svg)
+    return added
 
 
 def view_size(view: View) -> tuple[int, int]:
