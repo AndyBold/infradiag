@@ -43,8 +43,8 @@ def resolve_builtin_roles(cfg: Target, rows: list[dict], run, notes: list[str]) 
             continue
         for definition in found if isinstance(found, list) else [found]:
             if name := definition.get('roleName'):
-                rows.append({'type': 'microsoft.authorization/roledefinitions',
-                             'id': definition.get('id') or guid, 'properties': {'roleName': name}})
+                rows.append({'type': 'microsoft.authorization/roledefinitions', 'id': definition.get('id') or guid,
+                             'properties': {'roleName': name, 'permissions': definition.get('permissions') or []}})
 
 
 def extract_security(cfg: Target, run=None) -> SecurityEvidence:

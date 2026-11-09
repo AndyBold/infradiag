@@ -25,6 +25,7 @@ from .edges import add_endpoint_edges, add_reference_edges
 from .extract_azure import extract_azure, load_arg_cache
 from .extract_bicep import extract_bicep, load_whatif_cache
 from .extract_security import extract_security, load_security
+from .filters import HIDE_SCOPES, PRINCIPAL_KINDS, ROLE_PLANES, FilterReport, GrantFilter, filter_evidence
 from .icons import IconResolver, update_icons
 from .model import Graph, merge_graphs
 from .normalise import WhatIfSignals, graph_from_arg, graph_from_whatif
@@ -194,8 +195,8 @@ def _d2_svg(progress: Progress, text: str, d2_file: Path, svg_file: Path, view: 
 
 def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, sub_names: dict[str, str],
             style: str = "azure", overlay: str = "none", progress: Progress | None = None,
-            d2_timeout: int | None = None) -> int:
-    progress = progress or Progress()
+            d2_timeout: int | None = None, flt: GrantFilter | None = None) -> int:
+    progress, flt = progress or Progress(), flt or GrantFilter()
     progress.line(f"{cfg.label}: loading cache and building graphs ...")
     bicep, azure, signals = build_graphs(cfg)
     merged = merge_graphs(bicep, azure)
@@ -214,13 +215,18 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
         title = VIEWS[name] + suffix
         view = (build_detailed(merged, rules, title, drift_styles=styles, subscription_names=sub_names)
                 if name == "detailed" else build_summary(merged, rules, title))
-        stem = output_stem(name, style, overlay)
+        stem = output_stem(name, style, overlay, flt.suffix())
         if overlay != "none":
             projection, evidence = project(view, merged), _evidence(cfg, overlay)
-            view = apply_overlay(projection, merged, evidence, mode=overlay, rules=rules, subscription_names=sub_names)
+            evidence, report = filter_evidence(evidence, merged, flt)
+            view = apply_overlay(projection, merged, evidence, mode=overlay, rules=rules, subscription_names=sub_names,
+                                 prune_ungranted=flt.active)
+            title += flt.title_suffix()
+            view.title += flt.title_suffix()
+            view.notes[:0] = report.lines
             if overlay in ("identity", "all"):
                 rows = build_access_rows(projection, merged, evidence, rules, sub_names)
-                print(write_access(rows, cfg.out_dir / stem, f"{title}: access")[0])
+                print(write_access(rows, cfg.out_dir / stem, f"{title}: access", filter_note=report.text)[0])
         _d2_svg(progress, render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg",
                 view, d2_timeout)
         print(cfg.out_dir / f"{stem}.svg")
@@ -232,8 +238,8 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
 
 
 
-def output_stem(view: str, style: str, overlay: str) -> str:
-    return view + (f"-{style}" if style != "azure" else "") + (f"-{overlay}" if overlay != "none" else "")
+def output_stem(view: str, style: str, overlay: str, filters: str = "") -> str:
+    return view + (f"-{style}" if style != "azure" else "") + (f"-{overlay}" if overlay != "none" else "") + filters
 
 
 def _evidence(cfg: Target, overlay: str) -> SecurityEvidence:
@@ -245,8 +251,9 @@ def _evidence(cfg: Target, overlay: str) -> SecurityEvidence:
 
 
 def _render_application(cfg: Config, targets: list[Target], rules, args, views_path: Path,
-                        icon_dir: Path, sub_names: dict[str, str], progress: Progress | None = None) -> int:
-    progress = progress or Progress()
+                        icon_dir: Path, sub_names: dict[str, str], progress: Progress | None = None,
+                        flt: GrantFilter | None = None) -> int:
+    progress, flt = progress or Progress(), flt or GrantFilter()
     graphs, evidence, failures = [], SecurityEvidence(), []
     for n, target in enumerate(targets, 1):
         progress.step("loading caches, subscription", n, len(targets))
@@ -266,18 +273,22 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     projection = build_application(graph, rules, level=args.view, subscription_names=sub_names)
     projection.view.notes.extend(failures)
     base = deepcopy(projection.view)
+    evidence, report = filter_evidence(evidence, graph, flt)
     view = apply_overlay(projection, graph, evidence, mode=args.security_overlay, rules=rules,
-                         subscription_names=sub_names)
+                         subscription_names=sub_names, prune_ungranted=flt.active)
+    view.title += flt.title_suffix()
+    view.notes[:0] = report.lines
     icons = IconResolver(views_path.parent, icon_dir)
-    stem = output_stem(args.view, args.style, args.security_overlay)
+    stem = output_stem(args.view, args.style, args.security_overlay, flt.suffix())
     out = cfg.out_dir / 'applications'
     rows = None
     if args.security_overlay in ('identity', 'all'):
         rows = build_access_rows(ViewProjection(base, projection.resources), graph, evidence, rules, sub_names)
-        table, _csv = write_access(rows, out / stem, f'{view.title}: access', back=f'{stem}-index.html' if args.split else '')
+        table, _csv = write_access(rows, out / stem, f'{view.title}: access', back=f'{stem}-index.html' if args.split else '',
+                              filter_note=report.text)
         print(table)
     if args.split:
-        _render_split(progress, view, icons, args, out, stem, rows)
+        _render_split(progress, view, icons, args, out, stem, rows, report)
     else:
         _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg', view,
                 args.d2_timeout)
@@ -287,8 +298,10 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
         print(f'warning: {note}', file=sys.stderr)
     return 2 if failures else 0
 
-def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: str, rows) -> None:
+def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: str, rows,
+                  report: FilterReport | None = None) -> None:
     """One diagram (and access table) per environment, then an index page linking them."""
+    report = report or FilterReport([])
     parts = split_by_environment(view)
     if not parts:
         raise ConfigError("--split environment: the view has no environment containers to split")
@@ -313,7 +326,8 @@ def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: 
         table, count = "", 0
         if rows is not None:
             mine = for_environment(rows, part.environment)
-            table = write_access(mine, out / name, f"{part.view.title}: access", back=f"{stem}-index.html")[0].name
+            table = write_access(mine, out / name, f"{part.view.title}: access", back=f"{stem}-index.html",
+                                 filter_note=report.text)[0].name
             count = len(mine)
             written += [f"{name}-access.html", f"{name}-access.csv"]
         viewer = f"{name}.html"
@@ -322,12 +336,21 @@ def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: 
         if path.name not in written:
             path.unlink(missing_ok=True)
     manifest.write_text(json.dumps(written), encoding="utf-8")
-    notes = ["Each environment is its own diagram; other environments, external dependencies and principals appear as "
+    notes = [*report.lines, "Each environment is its own diagram; other environments, external dependencies and principals appear as "
              "stubs. Counts are nodes/containers and edges. The first row is the whole view: its access table is "
              "complete, its diagram is not drawn when split."]
     index = out / f"{stem}-index.html"
     index.write_text(render_index(f"{view.title}: by environment", entries, notes), encoding="utf-8")
     print(index)
+
+
+def _grant_filter(args) -> GrantFilter:
+    flt = GrantFilter(frozenset(args.hide_scope), args.role_plane or "", frozenset(args.principal_kind),
+                      frozenset(r.casefold() for r in args.role), args.drift_only)
+    if flt.active and args.security_overlay not in ("identity", "all"):
+        raise ConfigError("--hide-scope, --role-plane, --principal-kind, --role and --drift-only filter the identity "
+                          "overlay: use them with --security-overlay identity or all")
+    return flt
 
 
 def _positive_int(text: str) -> int:
@@ -368,6 +391,23 @@ def main(argv: list[str] | None = None) -> int:
     rd.add_argument("--split", choices=["environment"], default=None,
                     help="application/context views: one diagram per environment (and one access table per environment "
                          "with an identity overlay) plus an index page, instead of the whole view in one diagram")
+    flt = rd.add_argument_group("identity-overlay filters",
+                                "Hide whole classes of grants (with --security-overlay identity|all). They combine with each other, "
+                                "--split and every view and style; the access tables follow the same filters; filtered output "
+                                "files get a suffix; an identity left with no grant is not drawn.")
+    flt.add_argument("--hide-scope", action="append", choices=HIDE_SCOPES, metavar="SCOPE", default=[],
+                     help=f"hide grants made at this scope ({'|'.join(HIDE_SCOPES)}); repeatable")
+    flt.add_argument("--role-plane", choices=ROLE_PLANES,
+                     help="keep only data-plane roles (any dataActions, e.g. Key Vault Secrets User) or only control-plane "
+                          "roles (actions but no dataActions, e.g. Contributor). Roles whose definition was not cached are "
+                          "hidden and reported; re-run extract --azure --security to classify them")
+    flt.add_argument("--principal-kind", action="append", choices=PRINCIPAL_KINDS, metavar="KIND", default=[],
+                     help=f"keep only this kind of principal ({'|'.join(PRINCIPAL_KINDS)}); repeatable. Unresolved: not a "
+                          "visible identity and no principal type recorded")
+    flt.add_argument("--role", action="append", metavar="NAME", default=[],
+                     help="keep only grants of this role (case-insensitive exact name); repeatable")
+    flt.add_argument("--drift-only", action="store_true",
+                     help="keep only grants evidenced by one source (Bicep or Azure) alone")
     rd.add_argument("--d2-timeout", type=_positive_int, metavar="SECONDS", default=None,
                     help="give up on a diagram if d2's layout takes longer than this (default: no limit beyond d2's own)")
     co = sub.add_parser("cost", parents=[per_sub],
@@ -399,9 +439,10 @@ def main(argv: list[str] | None = None) -> int:
             return _icons(rules, views_path, icon_dir)
         if args.command == "render" and args.split and args.view not in ("application", "context"):
             raise ConfigError("--split environment needs --view application or --view context")
+        grant_filter = _grant_filter(args) if args.command == "render" else GrantFilter()
         chosen, sub_names = _targets(cfg, args)
         if args.command == "render" and args.view in ("application", "context"):
-            return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress())
+            return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress(), grant_filter)
         if args.command == "cost":
             period = _period(args)
             book = PriceBook(cfg.cache_dir, cfg.cost.currency, refresh=args.refresh)
@@ -419,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
                     rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
                 else:
                     rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
-                                         args.style, args.security_overlay, progress, args.d2_timeout))
+                                         args.style, args.security_overlay, progress, args.d2_timeout, grant_filter))
             except (CacheMissing, AzError, PriceError) as exc:
                 # One subscription's missing cache or az failure shouldn't stop the others.
                 print(f"error: {target.label}: {exc}", file=sys.stderr)

@@ -104,3 +104,13 @@ def test_no_role_lookup_when_everything_resolves(tmp_path):
     evidence = extract_security(cfg, run)
     assert {g.role_name for g in evidence.grants} == {'Reader', 'Custom'}
     assert not any(a[:3] == ['role', 'definition', 'list'] for a in calls)
+
+
+def test_role_plane_is_cached_from_builtin_and_custom_role_permissions(tmp_path):
+    cfg = SimpleNamespace(cache_dir=tmp_path, subscription=SUB)
+    def lookup(args):
+        return [{'roleName': 'Key Vault Secrets User', 'name': BUILTIN, 'id': f'/subscriptions/{SUB}/providers/'
+                 f'Microsoft.Authorization/roleDefinitions/{BUILTIN}',
+                 'permissions': [{'actions': [], 'dataActions': ['Microsoft.KeyVault/vaults/secrets/getSecret/action']}]}]
+    extract_security(cfg, _builtin_run(lookup, []))
+    assert load_security(cfg).grants[0].role_kind == 'data'

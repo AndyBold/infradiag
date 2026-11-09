@@ -50,6 +50,7 @@ infradiag --config ~/diagrams/my-platform/infradiag.yaml diff
 infradiag extract [--bicep | --azure]    # re-run only what-if or only Resource Graph
 infradiag diff
 infradiag render [--view detailed|summary|all] [--split environment] [--d2-timeout SECONDS]
+                 [--hide-scope SCOPE] [--role-plane data|control] [--principal-kind KIND] [--role NAME] [--drift-only]
 infradiag cost [--actual [--from YYYY-MM-DD --to YYYY-MM-DD]] [--detail] [--refresh]
 infradiag icons                          # download icons your views use into cache/icons/
 infradiag init [DIR] [--force]           # starter infradiag.yaml + views.yaml
@@ -261,6 +262,39 @@ environment, and how many drawn elements a broad scope covers. The page is self-
 filter every column or in a column's own box to filter that column; the row count updates.
 It opens from a `\\wsl.localhost\...` path or `file://`. Resources are not tagged outside
 the application views, so their environment column is empty.
+
+### Overlay filters: draw less per diagram
+
+Five `render` flags hide whole classes of grants from the identity overlay (`--security-overlay identity|all`;
+any other overlay is an error). They combine with each other (every filter must pass), with `--split environment`
+and with every view and style.
+
+| Flag | Keeps |
+| --- | --- |
+| `--hide-scope subscription\|management-group\|resource-group\|tenant` (repeatable) | everything except grants made at those scopes. Subscription and management-group grants are the inherited ones, drawn once each to the subscription node; resource-group grants cover a group |
+| `--role-plane data` / `control` | `data`: roles with any `dataActions` (Key Vault Secrets User, Storage Blob Data Contributor). `control`: roles with `actions` but no `dataActions` (Contributor, Owner, Reader). `notActions`/`notDataActions` are not subtracted, so the two sets never overlap |
+| `--principal-kind managed-identity\|user\|group\|service-principal\|device\|unresolved` (repeatable) | only these principals. A principal that is a visible identity is a managed identity; otherwise the assignment's recorded principal type is used; with neither it is `unresolved`. Caches written before principal types were recorded show everything non-identity as `unresolved` |
+| `--role NAME` (repeatable) | only grants of these roles, matched case-insensitively on the exact role name |
+| `--drift-only` | only grants evidenced by one source (Bicep or Azure) alone. Drift is judged on every grant before the other filters apply |
+
+**Role planes come from the cached role definitions.** `extract --azure --security` now stores each grant's plane
+(`role_kind` in `security.json`), read from the definition's permissions: custom roles from Resource Graph, built-in
+roles from `az role definition list --name <guid>`. A role whose plane is not known (a cache from before this flag,
+a definition lookup that failed, or a role with no actions at all) is **excluded by `--role-plane` and reported**: the
+diagram notes, the index page and the access table header say how many grants were hidden for that reason and name the
+roles. Re-run `extract --azure --security` to classify them. Declared (Bicep) grants usually carry only the role GUID;
+their name and plane are taken from an Azure grant of the same role definition when there is one.
+
+An identity left with no grant after filtering is not drawn, and neither are the attachment and configured-use edges
+that led to it, nor a subscription or resource-group node with no edge. With no filter, an identity that has only an
+attachment is still drawn, as before.
+
+The active filters appear in the diagram title (`... [filtered: no subscription/management-group scope; data-plane
+roles]`), as a note on the diagram, on the split index page and in the access table header, and the access tables
+(HTML and CSV) are built from the same filtered grants, so they match the diagram. Filtered files carry a suffix in
+their stem (`application-c4-identity-no-sub-no-mg-data`; `-p-<kinds>` for principals, `-roles-<hash>` for `--role`,
+`-drift`), so they never overwrite an unfiltered render, and each stem has its own `.split.json`, index and tables.
+With no filter the output is byte-for-byte what it was.
 
 ### One diagram per environment
 
