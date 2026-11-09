@@ -59,7 +59,7 @@ def test_render_writes_a_viewer_per_svg_and_prints_both_paths(tmp_path, monkeypa
 
 def test_gestures_move_a_composited_layer_and_settle_to_a_crisp_viewbox():
     text = viewer.viewer_html(SVG, "t")
-    assert "#stage.moving > svg { will-change: transform; }" in text
+    assert "will-change: transform;" in text
     assert "svg.style.transform = 'translate(" in text  # a gesture step is only a transform ...
     assert "svg.setAttribute('viewBox'" in text  # ... and settling re-renders by rewriting the viewBox
     assert "SETTLE_MS = 150" in text

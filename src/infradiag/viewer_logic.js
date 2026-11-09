@@ -53,7 +53,8 @@ var ViewerLogic = (function () {
 
   /* Debounce: `settle` runs `delay` ms after the last poke(). Timer functions are injectable for tests. */
   function createSettler(settle, delay, timers) {
-    var t = timers || { set: setTimeout, clear: clearTimeout };
+    // Arrow wrappers: browsers throw "Illegal invocation" if setTimeout is called with the timers object as `this`.
+    var t = timers || { set: function (f, ms) { return setTimeout(f, ms); }, clear: function (h) { clearTimeout(h); } };
     var handle = null;
     function run() { handle = null; settle(); }
     return {

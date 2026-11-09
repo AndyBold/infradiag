@@ -52,7 +52,7 @@ def classify(text: str, name: str) -> str | None:
     """What kind of infradiag page `text` is, or None for an HTML file that is not ours."""
     if LANDING_MARK in text[:_HEAD_BYTES]:
         return "landing"
-    if 'id="stage"' in text and "svgPanZoom" in text:
+    if 'id="stage"' in text and ("ViewerLogic" in text or "svgPanZoom" in text):  # current and older viewers
         return "diagram"
     if 'id="access"' in text:
         return "table"

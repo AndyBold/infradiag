@@ -26,8 +26,8 @@ _TEMPLATE = """<!DOCTYPE html>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; font-family: sans-serif; }
   #stage { position: fixed; inset: 0; overflow: hidden; touch-action: none; cursor: grab; outline: none; }
   #stage.dragging { cursor: grabbing; }
-  #stage > svg { width: 100%; height: 100%; display: block; transform-origin: 0 0; }
-  #stage.moving > svg { will-change: transform; }
+  /* will-change keeps the diagram on its own GPU layer from the start, so the first gesture does not pay for promoting it. */
+  #stage > svg { width: 100%; height: 100%; display: block; transform-origin: 0 0; will-change: transform; }
   #controls { position: fixed; top: 10px; right: 10px; z-index: 10; display: flex; gap: 4px; align-items: center;
               background: rgba(255,255,255,.92); border: 1px solid #bbb; border-radius: 6px; padding: 4px; }
   #controls button { font-size: 16px; min-width: 32px; height: 32px; cursor: pointer; border: 1px solid #999;
@@ -82,7 +82,6 @@ __LOGIC__
     base = cam;
     svg.setAttribute('viewBox', L.viewBoxOf(cam, W, H).join(' '));
     svg.style.transform = '';
-    stage.classList.remove('moving');
   }
   var settler = L.createSettler(bake, SETTLE_MS);
 
@@ -94,7 +93,6 @@ __LOGIC__
   // Called for every gesture step: move the cached layer only, and schedule the crisp render for when it goes quiet.
   function move(next) {
     cam = next;
-    stage.classList.add('moving');
     if (!raf) raf = requestAnimationFrame(paint);
     settler.poke();
     show();
