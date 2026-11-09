@@ -49,7 +49,7 @@ infradiag --config ~/diagrams/my-platform/infradiag.yaml diff
 ```bash
 infradiag extract [--bicep | --azure]    # re-run only what-if or only Resource Graph
 infradiag diff
-infradiag render [--view detailed|summary|all]
+infradiag render [--view detailed|summary|all] [--d2-timeout SECONDS]
 infradiag cost [--actual [--from YYYY-MM-DD --to YYYY-MM-DD]] [--detail] [--refresh]
 infradiag icons                          # download icons your views use into cache/icons/
 infradiag init [DIR] [--force]           # starter infradiag.yaml + views.yaml
@@ -209,6 +209,23 @@ style and every view. Purple relationships distinguish **identity attachment**, 
 conditions and Azure/Bicep provenance. Aggregated views retain workload names in security
 relationships or annotations when the endpoints collapse into the same visible element.
 An endpoint reference by itself does not establish which identity authenticates a call.
+
+To keep large views drawable, a role assignment is drawn once at the scope it was made, not
+once per resource it covers. A subscription (or management group) assignment is one edge to a
+subscription node; a resource-group assignment is one edge to a resource-group node when it
+covers more than one visible element; a resource-scope assignment stays on the resource.
+Edges between the same two nodes are merged into one that lists the roles (the first three,
+then `+N more`) with the sources, scopes and conditions summarised.
+
+### Large views and layout time
+
+d2's ELK layout can take a very long time on a view with thousands of edges. Before layout,
+`render` prints the view's node/container and edge counts on stderr, warns above 1500 edges,
+and prints an elapsed-time line about every minute while d2 runs. `--d2-timeout SECONDS`
+passes d2 its `--timeout` and also kills d2 ten seconds after that limit, since d2 0.9 does not
+reliably honour its own timeout during ELK layout (a 5.7 MB, 18,000-edge view ran on past 180 s with
+`--timeout 20`); the render then fails with an error instead of
+hanging. Without the flag nothing is limited beyond d2's own defaults.
 
 `extract --security` performs additional read-only queries for visible role assignments and
 role definitions (built-in role names are looked up per role with `az role definition list`),

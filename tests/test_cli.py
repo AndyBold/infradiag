@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from infradiag import actuals, cli, render_d2
 from infradiag.azcli import AzError
 from infradiag.icons import cache_path
@@ -73,7 +75,7 @@ def test_render_without_d2_writes_sources_and_reports_error(tmp_path, monkeypatc
 
 def test_render_single_view(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg: calls.append(svg.name))
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: calls.append(svg.name))
     assert cli.main(setup(tmp_path) + ["render", "--view", "summary"]) == 0
     assert calls == ["summary.svg"]
 
@@ -96,7 +98,7 @@ def test_extract_reports_partial_failure(tmp_path, monkeypatch):
 def test_render_marks_failed_entry_point_resources_unverified(tmp_path, monkeypatch, capsys):
     args = setup(tmp_path)
     (tmp_path / "cache" / SUB / "whatif" / "main-dev.json").write_text(json.dumps({"error": "boom"}))
-    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg: d2.write_text(text) if d2.parent.mkdir(parents=True, exist_ok=True) is None else None)
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: d2.write_text(text) if d2.parent.mkdir(parents=True, exist_ok=True) is None else None)
     assert cli.main(args + ["render", "--view", "detailed"]) == 0
     d2 = (tmp_path / DEV_OUT / "detailed.d2").read_text()
     assert "class: unverified" in d2
@@ -108,7 +110,7 @@ ICON = "azure/Security Service Color/Key Vaults.svg"
 
 
 def capture_d2(monkeypatch):
-    def fake(text, d2, svg):
+    def fake(text, d2, svg, **kw):
         d2.parent.mkdir(parents=True, exist_ok=True)
         d2.write_text(text)
     monkeypatch.setattr(cli, "render_svg", fake)
@@ -373,3 +375,10 @@ def test_security_extract_is_opt_in_and_rejects_bicep_only(tmp_path, monkeypatch
     assert cli.main(args + ['extract', '--azure']) == 0
     assert cli.main(args + ['extract', '--bicep', '--security']) == 2
     assert '--security' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "abc"])
+def test_d2_timeout_rejects_non_positive_or_non_integer(tmp_path, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(setup(tmp_path) + ["render", "--d2-timeout", value])
+    assert exc.value.code == 2 and "--d2-timeout" in capsys.readouterr().err

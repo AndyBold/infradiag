@@ -29,11 +29,11 @@ from .normalise import WhatIfSignals, graph_from_arg, graph_from_whatif
 from .overlays import apply_overlay
 from .prices import PriceBook, PriceError
 from .progress import Progress
-from .render_d2 import D2NotFound, render_d2, render_svg
+from .render_d2 import D2NotFound, render_d2, render_svg, view_size
 from .rules import load_rules
 from .security import SecurityEvidence, declared_security
 from .subscriptions import SubscriptionError, discover, folder_names, load_subscriptions, select, write_subscriptions
-from .views import build_detailed, build_summary, project
+from .views import View, build_detailed, build_summary, project
 
 VIEWS = {"detailed": "Detailed topology", "summary": "Architecture overview"}
 
@@ -169,16 +169,27 @@ def _icons(rules, views_path: Path, icon_dir: Path) -> int:
     return 1 if failures else 0
 
 
-def _d2_svg(progress: Progress, text: str, d2_file: Path, svg_file: Path) -> None:
-    """Run d2 (the slow step: ELK layout of the whole view), saying so first and how long it took after."""
-    progress.line(f"d2: laying out {svg_file.name} (ELK; large views can take minutes) ...")
+EDGE_WARN = 1500  # views with more edges than this have stalled ELK layout for 30+ minutes
+
+
+def _d2_svg(progress: Progress, text: str, d2_file: Path, svg_file: Path, view: View, timeout: int | None = None) -> None:
+    """Run d2 (the slow step: ELK layout of the whole view), saying what it is laying out first and how long it took after."""
+    nodes, edges = view_size(view)
+    progress.line(f"d2: laying out {svg_file.name}: {nodes} nodes/containers, {edges} edges "
+                  "(ELK; large views can take minutes) ...")
+    if edges > EDGE_WARN:
+        print(f"warning: {svg_file.name} has {edges} edges; ELK layout may take a very long time or never finish. "
+              "Narrow the view (--subscription, a smaller --security-overlay) or set --d2-timeout to cap the wait",
+              file=sys.stderr)
     started = time.monotonic()
-    render_svg(text, d2_file, svg_file)
+    render_svg(text, d2_file, svg_file, timeout=timeout,
+               on_tick=lambda elapsed: progress.line(f"d2: still laying out {svg_file.name} ({elapsed / 60:.0f} min elapsed) ..."))
     progress.line(f"d2: {svg_file.name} done in {time.monotonic() - started:.0f}s")
 
 
 def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, sub_names: dict[str, str],
-            style: str = "azure", overlay: str = "none", progress: Progress | None = None) -> int:
+            style: str = "azure", overlay: str = "none", progress: Progress | None = None,
+            d2_timeout: int | None = None) -> int:
     progress = progress or Progress()
     progress.line(f"{cfg.label}: loading cache and building graphs ...")
     bicep, azure, signals = build_graphs(cfg)
@@ -199,9 +210,11 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
         view = (build_detailed(merged, rules, title, drift_styles=styles, subscription_names=sub_names)
                 if name == "detailed" else build_summary(merged, rules, title))
         if overlay != "none":
-            view = apply_overlay(project(view, merged), merged, _evidence(cfg, overlay), mode=overlay, rules=rules)
+            view = apply_overlay(project(view, merged), merged, _evidence(cfg, overlay), mode=overlay, rules=rules,
+                                 subscription_names=sub_names)
         stem = output_stem(name, style, overlay)
-        _d2_svg(progress, render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg")
+        _d2_svg(progress, render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg",
+                view, d2_timeout)
         print(cfg.out_dir / f"{stem}.svg")
     if icons.missing:
         print(f"note: {len(icons.missing)} icon(s) not cached locally, fetched from the internet — "
@@ -243,15 +256,27 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     graph = merge_graphs(*graphs)
     projection = build_application(graph, rules, level=args.view, subscription_names=sub_names)
     projection.view.notes.extend(failures)
-    view = apply_overlay(projection, graph, evidence, mode=args.security_overlay, rules=rules)
+    view = apply_overlay(projection, graph, evidence, mode=args.security_overlay, rules=rules,
+                         subscription_names=sub_names)
     icons = IconResolver(views_path.parent, icon_dir)
     stem = output_stem(args.view, args.style, args.security_overlay)
     out = cfg.out_dir / 'applications'
-    _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg')
+    _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg', view,
+            args.d2_timeout)
     print(out / f'{stem}.svg')
     for note in failures:
         print(f'warning: {note}', file=sys.stderr)
     return 2 if failures else 0
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive number of seconds, got {value}")
+    return value
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="infradiag", description=__doc__)
@@ -278,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="all retains detailed + summary; application/context combine selected subscriptions")
     rd.add_argument("--style", choices=["azure", "c4"], default="azure")
     rd.add_argument("--security-overlay", choices=["none", "identity", "network", "all"], default="none")
+    rd.add_argument("--d2-timeout", type=_positive_int, metavar="SECONDS", default=None,
+                    help="give up on a diagram if d2's layout takes longer than this (default: no limit beyond d2's own)")
     co = sub.add_parser("cost", parents=[per_sub],
                         help="write out/<subscription>/cost-report.md (list-price estimates) from the cache")
     co.add_argument("--actual", action="store_true",
@@ -325,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
                     rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
                 else:
                     rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
-                                         args.style, args.security_overlay, progress))
+                                         args.style, args.security_overlay, progress, args.d2_timeout))
             except (CacheMissing, AzError, PriceError) as exc:
                 # One subscription's missing cache or az failure shouldn't stop the others.
                 print(f"error: {target.label}: {exc}", file=sys.stderr)
