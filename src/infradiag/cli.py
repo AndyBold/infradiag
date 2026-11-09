@@ -28,6 +28,7 @@ from .extract_security import extract_security, load_security
 from .filters import HIDE_SCOPES, PRINCIPAL_KINDS, ROLE_PLANES, FilterReport, GrantFilter, filter_evidence
 from .icons import IconResolver, update_icons
 from .model import Graph, merge_graphs
+from .nav import refresh_nav
 from .normalise import WhatIfSignals, graph_from_arg, graph_from_whatif
 from .overlays import apply_overlay
 from .prices import PriceBook, PriceError
@@ -230,7 +231,7 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
         _d2_svg(progress, render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg",
                 view, d2_timeout)
         print(cfg.out_dir / f"{stem}.svg")
-        print(write_viewer(cfg.out_dir / f"{stem}.svg"))
+        print(write_viewer(cfg.out_dir / f"{stem}.svg", title))
     if icons.missing:
         print(f"note: {len(icons.missing)} icon(s) not cached locally, fetched from the internet — "
               "run `infradiag icons` to cache them", file=sys.stderr)
@@ -293,7 +294,7 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
         _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg', view,
                 args.d2_timeout)
         print(out / f'{stem}.svg')
-        print(write_viewer(out / f'{stem}.svg'))
+        print(write_viewer(out / f'{stem}.svg', view.title))
     for note in failures:
         print(f'warning: {note}', file=sys.stderr)
     return 2 if failures else 0
@@ -321,7 +322,7 @@ def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: 
         _d2_svg(progress, render_d2(part.view, icons, style=args.style), out / f"{name}.d2", out / f"{name}.svg",
                 part.view, args.d2_timeout)
         print(out / f"{name}.svg")
-        print(write_viewer(out / f"{name}.svg"))
+        print(write_viewer(out / f"{name}.svg", part.view.title))
         written += [f"{name}.d2", f"{name}.svg", f"{name}.html"]
         table, count = "", 0
         if rows is not None:
@@ -351,6 +352,13 @@ def _grant_filter(args) -> GrantFilter:
         raise ConfigError("--hide-scope, --role-plane, --principal-kind, --role and --drift-only filter the identity "
                           "overlay: use them with --security-overlay identity or all")
     return flt
+
+
+def _refresh_nav(cfg: Config) -> None:
+    """Rebuild the shared navigation (nav.js, the landing page) from everything now under the output root."""
+    if cfg.out_dir.is_dir():
+        pages = refresh_nav(cfg.out_dir)
+        print(f"navigation: {cfg.out_dir / 'index.html'} ({len(pages)} pages)", file=sys.stderr)
 
 
 def _positive_int(text: str) -> int:
@@ -442,29 +450,36 @@ def main(argv: list[str] | None = None) -> int:
         grant_filter = _grant_filter(args) if args.command == "render" else GrantFilter()
         chosen, sub_names = _targets(cfg, args)
         if args.command == "render" and args.view in ("application", "context"):
-            return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress(), grant_filter)
+            try:
+                return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress(), grant_filter)
+            finally:
+                _refresh_nav(cfg)
         if args.command == "cost":
             period = _period(args)
             book = PriceBook(cfg.cache_dir, cfg.cost.currency, refresh=args.refresh)
         rc = 0
         progress = Progress()
-        for n, target in enumerate(chosen, 1):
-            if len(chosen) > 1 and args.command in ("extract", "render"):
-                progress.line(f"subscription {n}/{len(chosen)}: {target.label}")
-            try:
-                if args.command == "extract":
-                    rc = max(rc, _extract(target, args, progress))
-                elif args.command == "diff":
-                    rc = max(rc, _diff(target, rules))
-                elif args.command == "cost":
-                    rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
-                else:
-                    rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
-                                         args.style, args.security_overlay, progress, args.d2_timeout, grant_filter))
-            except (CacheMissing, AzError, PriceError) as exc:
-                # One subscription's missing cache or az failure shouldn't stop the others.
-                print(f"error: {target.label}: {exc}", file=sys.stderr)
-                rc = 2
+        try:
+            for n, target in enumerate(chosen, 1):
+                if len(chosen) > 1 and args.command in ("extract", "render"):
+                    progress.line(f"subscription {n}/{len(chosen)}: {target.label}")
+                try:
+                    if args.command == "extract":
+                        rc = max(rc, _extract(target, args, progress))
+                    elif args.command == "diff":
+                        rc = max(rc, _diff(target, rules))
+                    elif args.command == "cost":
+                        rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
+                    else:
+                        rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
+                                             args.style, args.security_overlay, progress, args.d2_timeout, grant_filter))
+                except (CacheMissing, AzError, PriceError) as exc:
+                    # One subscription's missing cache or az failure shouldn't stop the others.
+                    print(f"error: {target.label}: {exc}", file=sys.stderr)
+                    rc = 2
+        finally:
+            if args.command == "render":
+                _refresh_nav(cfg)
         return rc
     except (ConfigError, SubscriptionError, CacheMissing, AzError, D2NotFound, RuntimeError,
             FileNotFoundError) as exc:
