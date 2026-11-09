@@ -6,6 +6,7 @@ import argparse
 import json
 import shutil
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from .model import Graph, merge_graphs
 from .normalise import WhatIfSignals, graph_from_arg, graph_from_whatif
 from .overlays import apply_overlay
 from .prices import PriceBook, PriceError
+from .progress import Progress
 from .render_d2 import D2NotFound, render_d2, render_svg
 from .rules import load_rules
 from .security import SecurityEvidence, declared_security
@@ -74,7 +76,7 @@ def _targets(cfg: Config, args) -> tuple[list[Target], dict[str, str]]:
     return chosen, {s.id: s.name for s in subs}
 
 
-def _extract(cfg: Target, args) -> int:
+def _extract(cfg: Target, args, progress: Progress) -> int:
     print(f"== {cfg.label} ==")
     both = not args.bicep and not args.azure
     failures = {}
@@ -83,8 +85,10 @@ def _extract(cfg: Target, args) -> int:
     elif args.bicep or both:
         failures = extract_bicep(cfg)
     if args.azure or both:
+        progress.line(f"{cfg.label}: querying Resource Graph ...")
         print(f"Resource Graph: {extract_azure(cfg)} rows")
     if args.security:
+        progress.line(f"{cfg.label}: reading RBAC grants and role definitions ...")
         evidence = extract_security(cfg)
         for note in evidence.coverage:
             print(f"security: {note}", file=sys.stderr)
@@ -165,8 +169,18 @@ def _icons(rules, views_path: Path, icon_dir: Path) -> int:
     return 1 if failures else 0
 
 
+def _d2_svg(progress: Progress, text: str, d2_file: Path, svg_file: Path) -> None:
+    """Run d2 (the slow step: ELK layout of the whole view), saying so first and how long it took after."""
+    progress.line(f"d2: laying out {svg_file.name} (ELK; large views can take minutes) ...")
+    started = time.monotonic()
+    render_svg(text, d2_file, svg_file)
+    progress.line(f"d2: {svg_file.name} done in {time.monotonic() - started:.0f}s")
+
+
 def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, sub_names: dict[str, str],
-            style: str = "azure", overlay: str = "none") -> int:
+            style: str = "azure", overlay: str = "none", progress: Progress | None = None) -> int:
+    progress = progress or Progress()
+    progress.line(f"{cfg.label}: loading cache and building graphs ...")
     bicep, azure, signals = build_graphs(cfg)
     merged = merge_graphs(bicep, azure)
     if signals.failed:
@@ -178,14 +192,16 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
         print(f"note: {cfg.label}: no Bicep entry points in the config; drawn from Azure only", file=sys.stderr)
         styles, suffix = {}, " (Azure only)"
     icons = IconResolver(views_path.parent, icon_dir)
-    for name in (VIEWS if which == "all" else [which]):
+    names = list(VIEWS) if which == "all" else [which]
+    for i, name in enumerate(names, 1):
+        progress.line(f"{cfg.label}: view {i}/{len(names)}: {name}")
         title = VIEWS[name] + suffix
         view = (build_detailed(merged, rules, title, drift_styles=styles, subscription_names=sub_names)
                 if name == "detailed" else build_summary(merged, rules, title))
         if overlay != "none":
             view = apply_overlay(project(view, merged), merged, _evidence(cfg, overlay), mode=overlay, rules=rules)
         stem = output_stem(name, style, overlay)
-        render_svg(render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg")
+        _d2_svg(progress, render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg")
         print(cfg.out_dir / f"{stem}.svg")
     if icons.missing:
         print(f"note: {len(icons.missing)} icon(s) not cached locally, fetched from the internet — "
@@ -207,9 +223,11 @@ def _evidence(cfg: Target, overlay: str) -> SecurityEvidence:
 
 
 def _render_application(cfg: Config, targets: list[Target], rules, args, views_path: Path,
-                        icon_dir: Path, sub_names: dict[str, str]) -> int:
+                        icon_dir: Path, sub_names: dict[str, str], progress: Progress | None = None) -> int:
+    progress = progress or Progress()
     graphs, evidence, failures = [], SecurityEvidence(), []
-    for target in targets:
+    for n, target in enumerate(targets, 1):
+        progress.step("loading caches, subscription", n, len(targets))
         try:
             bicep, azure, signals = build_graphs(target)
             graphs.extend((bicep, azure))
@@ -218,8 +236,10 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
                 failures.append(f"{target.label}: what-if failed for {', '.join(signals.failed)}")
         except (CacheMissing, AzError) as exc:
             failures.append(f"{target.label}: {exc}")
+    progress.clear()
     if not graphs:
         raise CacheMissing("No selected subscription has usable resource caches; run infradiag extract")
+    progress.line(f"building {args.view} view and {args.security_overlay} overlay ...")
     graph = merge_graphs(*graphs)
     projection = build_application(graph, rules, level=args.view, subscription_names=sub_names)
     projection.view.notes.extend(failures)
@@ -227,7 +247,7 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     icons = IconResolver(views_path.parent, icon_dir)
     stem = output_stem(args.view, args.style, args.security_overlay)
     out = cfg.out_dir / 'applications'
-    render_svg(render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg')
+    _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg')
     print(out / f'{stem}.svg')
     for note in failures:
         print(f'warning: {note}', file=sys.stderr)
@@ -287,22 +307,25 @@ def main(argv: list[str] | None = None) -> int:
             return _icons(rules, views_path, icon_dir)
         chosen, sub_names = _targets(cfg, args)
         if args.command == "render" and args.view in ("application", "context"):
-            return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names)
+            return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress())
         if args.command == "cost":
             period = _period(args)
             book = PriceBook(cfg.cache_dir, cfg.cost.currency, refresh=args.refresh)
         rc = 0
-        for target in chosen:
+        progress = Progress()
+        for n, target in enumerate(chosen, 1):
+            if len(chosen) > 1 and args.command in ("extract", "render"):
+                progress.line(f"subscription {n}/{len(chosen)}: {target.label}")
             try:
                 if args.command == "extract":
-                    rc = max(rc, _extract(target, args))
+                    rc = max(rc, _extract(target, args, progress))
                 elif args.command == "diff":
                     rc = max(rc, _diff(target, rules))
                 elif args.command == "cost":
                     rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
                 else:
                     rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
-                                         args.style, args.security_overlay))
+                                         args.style, args.security_overlay, progress))
             except (CacheMissing, AzError, PriceError) as exc:
                 # One subscription's missing cache or az failure shouldn't stop the others.
                 print(f"error: {target.label}: {exc}", file=sys.stderr)
