@@ -18,4 +18,7 @@ def write_json(path: Path, data) -> None:
 def read_json(path: Path, hint: str):
     if not path.exists():
         raise CacheMissing(f"{path} not found — run `{hint}`")
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except ValueError as exc:  # an interrupted extract can leave a truncated file
+        raise CacheMissing(f"{path} is not valid JSON ({exc}) — run `{hint}`") from exc
