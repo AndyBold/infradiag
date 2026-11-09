@@ -132,9 +132,9 @@ def test_nav_is_self_contained_and_not_dependent_on_a_server(tmp_path):
     for name in ("nav.js", "index.html"):
         text = (tmp_path / name).read_text()
         assert not re.search(r"https?://|fetch\(|XMLHttpRequest|@import|import\(", text), name
-        assert not re.search(r"^\s*(import|export)\s", text, re.M), name
+        assert not re.search(r"^\s*(import|export)\s", text, re.MULTILINE), name
     for p in nav.scan(tmp_path):
-        assert not re.search(r"https?://", re.search(r"<a data-infradiag-home.*?</a>", (tmp_path / p.path).read_text(), re.S).group(0))
+        assert not re.search(r"https?://", re.search(r"<a data-infradiag-home.*?</a>", (tmp_path / p.path).read_text(), re.DOTALL).group(0))
 
 
 def test_titles_with_script_close_tags_cannot_break_nav_js(tmp_path):
