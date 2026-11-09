@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from infradiag import actuals, cli, render_d2
 from infradiag.azcli import AzError
 from infradiag.icons import cache_path
@@ -373,3 +375,10 @@ def test_security_extract_is_opt_in_and_rejects_bicep_only(tmp_path, monkeypatch
     assert cli.main(args + ['extract', '--azure']) == 0
     assert cli.main(args + ['extract', '--bicep', '--security']) == 2
     assert '--security' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "abc"])
+def test_d2_timeout_rejects_non_positive_or_non_integer(tmp_path, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(setup(tmp_path) + ["render", "--d2-timeout", value])
+    assert exc.value.code == 2 and "--d2-timeout" in capsys.readouterr().err

@@ -224,3 +224,18 @@ def test_distinct_principals_and_targets_stay_distinct_edges():
     grants = [Grant('u1', 'r', 'Reader', f'/subscriptions/{SUB}'), Grant('u2', 'r', 'Reader', f'/subscriptions/{SUB}')]
     view = apply_overlay(p, graph, SecurityEvidence(grants=grants), mode='identity', rules=Rules())
     assert len(grant_edges(view)) == 2
+
+
+@pytest.mark.parametrize("scope", [f'/subscriptions/{SUB}', f'/subscriptions/{SUB}/resourceGroups/rg-a',
+                                   '/providers/microsoft.management/managementgroups/root'])
+def test_grant_drawn_to_a_scope_node_leaves_no_disconnected_identity_resource_nodes(scope):
+    graph = many_resource_graph()
+    mi = rid('rg-a', 'Microsoft.ManagedIdentity/userAssignedIdentities/hidden-mi').lower()
+    graph.nodes.update(graph_from_arg([{'id': mi, 'properties': {'principalId': 'x'}}]).nodes)
+    p = build_application(graph, Rules(summary_hide_types=('microsoft.managedidentity/userassignedidentities',)),
+                          level='application', subscription_names={})
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', scope, subscription=SUB)]),
+                         mode='identity', rules=Rules())
+    assert not any(n.kind == 'identity_resource' for n in view.nodes)
+    connected = {e.source for e in view.edges} | {e.target for e in view.edges}
+    assert all(n.key in connected for n in view.nodes if n.kind in ('subscription', 'resource_group', 'principal'))

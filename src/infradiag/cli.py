@@ -268,6 +268,16 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
         print(f'warning: {note}', file=sys.stderr)
     return 2 if failures else 0
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive number of seconds, got {value}")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="infradiag", description=__doc__)
     parser.add_argument("--config", type=Path, metavar="PATH",
@@ -293,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="all retains detailed + summary; application/context combine selected subscriptions")
     rd.add_argument("--style", choices=["azure", "c4"], default="azure")
     rd.add_argument("--security-overlay", choices=["none", "identity", "network", "all"], default="none")
-    rd.add_argument("--d2-timeout", type=int, metavar="SECONDS", default=None,
+    rd.add_argument("--d2-timeout", type=_positive_int, metavar="SECONDS", default=None,
                     help="give up on a diagram if d2's layout takes longer than this (default: no limit beyond d2's own)")
     co = sub.add_parser("cost", parents=[per_sub],
                         help="write out/<subscription>/cost-report.md (list-price estimates) from the cache")

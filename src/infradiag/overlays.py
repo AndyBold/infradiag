@@ -103,29 +103,35 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
         for grant in evidence.grants:
             if (grant.source, grant.principal_id) in excluded_principals:
                 continue
-            # Identities are ARM resources as well as security principals. Keep
-            # permissions on the resource distinct from grants made to its principal.
-            for rid, n in sorted(graph.nodes.items()):
-                ancestor = grant.scope.startswith('/providers/microsoft.management/managementgroups/')
-                if (n.type == 'microsoft.managedidentity/userassignedidentities' and allowed(rid)
-                        and (scope_contains(grant.scope, rid) or (ancestor and grant.subscription == n.subscription))
-                        and rid not in mapping):
-                    mapping[rid] = extra(f'sr{len(nodes)}', n.name, 'Managed identity resource', 'identity_resource')
             scope = normalise_id(grant.scope)
             in_sub = SUBSCRIPTION_SCOPE.match(scope)
             in_rg = RESOURCE_GROUP_SCOPE.match(scope)
             ancestor = scope.startswith('/providers/microsoft.management/managementgroups/')
             sub_id = (in_sub.group(1) if in_sub else grant.subscription).lower() if (in_sub or ancestor) else ''
-            targets = []
-            for rid in sorted(mapping):
-                n = graph.nodes[rid]
-                if n.type.startswith('microsoft.authorization/'):
-                    continue
-                if sub_id:
-                    if n.subscription.lower() == sub_id:
-                        targets.append(rid)
-                elif scope_contains(grant.scope, rid):
-                    targets.append(rid)
+
+            def find_targets(sub_id=sub_id, grant=grant):
+                found = []
+                for rid in sorted(mapping):
+                    n = graph.nodes[rid]
+                    if n.type.startswith('microsoft.authorization/'):
+                        continue
+                    if sub_id:
+                        if n.subscription.lower() == sub_id:
+                            found.append(rid)
+                    elif scope_contains(grant.scope, rid):
+                        found.append(rid)
+                return found
+            targets = find_targets()
+            to_scope_node = bool(sub_id) or (bool(in_rg) and len({mapping[r] for r in targets}) > 1)
+            if not to_scope_node:
+                # Identities are ARM resources as well as security principals. Keep permissions on the resource
+                # distinct from grants made to its principal. Not for grants drawn to a scope node: the identity
+                # resource would have no edge.
+                for rid, n in sorted(graph.nodes.items()):
+                    if (n.type == 'microsoft.managedidentity/userassignedidentities' and allowed(rid)
+                            and scope_contains(grant.scope, rid) and rid not in mapping):
+                        mapping[rid] = extra(f'sr{len(nodes)}', n.name, 'Managed identity resource', 'identity_resource')
+                targets = find_targets()
             if not targets:
                 continue
             ikey = (grant.source, grant.principal_id)
@@ -148,7 +154,7 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                         f'ss{len(nodes)}', subscription_label(sub_id, subscription_names.get(sub_id)), 'subscription', 'subscription')
                 tag = 'management group scope' if ancestor else 'subscription scope'
                 grant_edges.setdefault((key, skey), []).append((grant, tag, nodes[skey].label))
-            elif in_rg and len({mapping[r] for r in targets}) > 1:
+            elif to_scope_node:
                 rkey = scope_nodes.get(('resource_group', scope))
                 if rkey is None:
                     rkey = scope_nodes[('resource_group', scope)] = extra(
