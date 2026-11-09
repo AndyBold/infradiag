@@ -51,6 +51,7 @@ infradiag extract [--bicep | --azure]    # re-run only what-if or only Resource 
 infradiag diff
 infradiag render [--view detailed|summary|all] [--split environment] [--d2-timeout SECONDS]
                  [--hide-scope SCOPE] [--role-plane data|control] [--principal-kind KIND] [--role NAME] [--drift-only]
+infradiag build [--preset full] [--d2-timeout SECONDS] [--dry-run]   # the whole diagram set in one go
 infradiag cost [--actual [--from YYYY-MM-DD --to YYYY-MM-DD]] [--detail] [--refresh]
 infradiag icons                          # download icons your views use into cache/icons/
 infradiag init [DIR] [--force]           # starter infradiag.yaml + views.yaml
@@ -87,6 +88,36 @@ Explorer or from a `\\wsl.localhost\...` path in Edge. From a WSL shell:
 ```sh
 explorer.exe "$(wslpath -w out/Contoso-Dev/applications/application-c4-identity.html)"
 ```
+
+### The whole set in one command: `infradiag build`
+
+```bash
+infradiag extract --subscription USA-NonProd --bicep
+infradiag extract --subscription USA-NonProd --azure --security
+infradiag build --subscription USA-NonProd --d2-timeout 900
+```
+
+`build` is a separate command, not `render --preset`, because it is not one render with different flags: it runs
+several, each with its own view, style, overlay and filters, and reports on them as a set. It only renders (it never
+runs `extract`) and reads the cache, so it needs both extracts above. The steps of the `full` preset
+(`infradiag build --dry-run` prints them with the equivalent `render` flags):
+
+1. detailed topology, `--security-overlay all`
+2. architecture overview, `--security-overlay all`
+3. application view, `--style c4 --security-overlay identity --split environment`
+4. context view, same flags
+5. focused variants: detailed with data-plane roles only and subscription/management-group grants hidden;
+   detailed with `--drift-only`
+
+The steps are data in `src/infradiag/presets.py`: add a `BuildStep` to `FOCUSED_VARIANTS` (or `FULL`) to add a diagram.
+
+With exactly one subscription selected, the application and context outputs go to `out/<subscription>/applications/`, so
+building another subscription does not overwrite them; the master page shows that folder as a sub-group under the
+subscription. With several selected they are combined in `out/applications/`, as `render` does. Plain
+`render --view application` is unchanged and still writes to `out/applications/`.
+
+Each step prints `step n/total`; a failed step (for example a d2 timeout) is reported and the build carries on. It ends
+with a summary, exits non-zero if any step failed, and rebuilds `out/index.html` either way.
 
 ### Browsing everything: `out/index.html`
 

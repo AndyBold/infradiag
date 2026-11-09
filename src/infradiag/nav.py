@@ -92,7 +92,8 @@ def build_tree(pages: list[Page]) -> list[dict]:
     for page in pages:
         folders.setdefault(page.folder, []).append(page)
     result = []
-    for folder in sorted(folders, key=lambda f: (f != "", f.casefold())):
+    # Path-wise order, so a folder's subfolders follow it directly (a plain string sort would put `a-b` between `a` and `a/b`).
+    for folder in sorted(folders, key=lambda f: (f != "", tuple(part.casefold() for part in f.split("/")))):
         members = sorted(folders[folder], key=_order)
         indexes = {p.stem.removesuffix("-index"): _item(p) for p in members if p.kind == "index"
                    and p.stem.endswith("-index")}
@@ -105,7 +106,12 @@ def build_tree(pages: list[Page]) -> list[dict]:
                 indexes[max(parents, key=len)]["children"].append(item)
             else:
                 top.append(item)
-        result.append({"name": folder or "(top level)", "items": top})
+        group = {"name": folder or "(top level)", "items": top}
+        parent = folder.rpartition("/")[0]
+        if folder and "/" in folder and parent in folders:
+            # e.g. `Sub/applications` under `Sub`: drawn indented below it, labelled by its own folder name
+            group["label"], group["depth"] = folder.rpartition("/")[2], 1
+        result.append(group)
     return result
 
 
@@ -225,7 +231,7 @@ body.collapsed #toggle{left:8px}
   }
   DATA.groups.forEach(function (g) {
     var d = document.createElement('details'), s = document.createElement('summary'), ul = document.createElement('ul');
-    s.textContent = g.name; d.appendChild(s); d.appendChild(ul); d.open = true;
+    s.textContent = g.label || g.name; d.appendChild(s); if (g.depth) d.style.marginLeft = '14px'; d.title = g.name; d.appendChild(ul); d.open = true;
     var items = g.items.map(build);
     items.forEach(function (r) { ul.appendChild(r.li); });
     list.insertBefore(d, none);

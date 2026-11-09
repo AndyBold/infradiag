@@ -31,6 +31,7 @@ from .model import Graph, merge_graphs
 from .nav import refresh_nav
 from .normalise import WhatIfSignals, graph_from_arg, graph_from_whatif
 from .overlays import apply_overlay
+from .presets import PRESETS, BuildStep
 from .prices import PriceBook, PriceError
 from .progress import Progress
 from .render_d2 import D2NotFound, add_edge_tooltips, edge_tooltips, render_d2, render_svg, view_size
@@ -254,7 +255,8 @@ def _evidence(cfg: Target, overlay: str) -> SecurityEvidence:
 
 def _render_application(cfg: Config, targets: list[Target], rules, args, views_path: Path,
                         icon_dir: Path, sub_names: dict[str, str], progress: Progress | None = None,
-                        flt: GrantFilter | None = None) -> int:
+                        flt: GrantFilter | None = None, out: Path | None = None) -> int:
+    """`out` is where the application outputs go (default: `<out_dir>/applications`, shared by every subscription)."""
     progress, flt = progress or Progress(), flt or GrantFilter()
     graphs, evidence, failures = [], SecurityEvidence(), []
     for n, target in enumerate(targets, 1):
@@ -282,7 +284,7 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     view.notes[:0] = report.lines
     icons = IconResolver(views_path.parent, icon_dir)
     stem = output_stem(args.view, args.style, args.security_overlay, flt.suffix())
-    out = cfg.out_dir / 'applications'
+    out = out or cfg.out_dir / 'applications'
     untagged = out / f'{stem}-untagged.csv'
     env_report = write_untagged(projection.env_decisions, graph, untagged,
                                 rules.applications.get('environment_tag', 'environment'))
@@ -353,6 +355,54 @@ def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: 
                                   [(untagged, "Resources placed in an environment by rule, and those still unspecified")]
                                   if untagged else []), encoding="utf-8")
     print(index)
+
+STEP_ERRORS = (CacheMissing, AzError, PriceError, ConfigError, D2NotFound, RuntimeError, FileNotFoundError)
+
+
+def _run_step(step: BuildStep, cfg: Config, chosen: list[Target], rules, args, views_path: Path, icon_dir: Path,
+              sub_names: dict[str, str], progress: Progress) -> list[str]:
+    """Run one build step; return what went wrong (empty when it all worked). Never raises for a failed render."""
+    problems: list[str] = []
+    flt = step.grant_filter
+    if step.combined:
+        ns = argparse.Namespace(view=step.view, style=step.style, security_overlay=step.overlay, split=step.split,
+                                d2_timeout=args.d2_timeout)
+        # One subscription: its own folder, so another subscription's set is not overwritten. Several: combined, as render.
+        out = chosen[0].out_dir / "applications" if len(chosen) == 1 else None
+        try:
+            if _render_application(cfg, chosen, rules, ns, views_path, icon_dir, sub_names, progress, flt, out):
+                problems.append("finished with errors (see above)")
+        except STEP_ERRORS as exc:
+            problems.append(str(exc))
+        return problems
+    for target in chosen:
+        try:
+            _render(target, rules, step.view, views_path, icon_dir, sub_names, step.style, step.overlay, progress,
+                    args.d2_timeout, flt)
+        except STEP_ERRORS as exc:
+            problems.append(f"{target.label}: {exc}")
+    return problems
+
+
+def _build(cfg: Config, chosen: list[Target], rules, args, views_path: Path, icon_dir: Path,
+           sub_names: dict[str, str], progress: Progress) -> int:
+    """Run every step of the preset, carry on past failures, then summarise. 0 only if every step succeeded."""
+    steps = PRESETS[args.preset]
+    results: list[tuple[BuildStep, float, list[str]]] = []
+    started = time.monotonic()
+    for n, step in enumerate(steps, 1):
+        progress.line(f"step {n}/{len(steps)}: {step.name}")
+        begun = time.monotonic()
+        problems = _run_step(step, cfg, chosen, rules, args, views_path, icon_dir, sub_names, progress)
+        for problem in problems:
+            print(f"error: step {n}/{len(steps)} ({step.name}): {problem}", file=sys.stderr)
+        results.append((step, time.monotonic() - begun, problems))
+    failed = [r for r in results if r[2]]
+    print(f"\nbuild {args.preset}: {len(results) - len(failed)}/{len(results)} steps succeeded "
+          f"in {time.monotonic() - started:.0f}s")
+    for n, (step, seconds, problems) in enumerate(results, 1):
+        print(f"  {n}. {'FAILED' if problems else 'ok    '} {step.name} ({seconds:.0f}s)")
+    return 2 if failed else 0
 
 
 def _grant_filter(args) -> GrantFilter:
@@ -441,6 +491,23 @@ def main(argv: list[str] | None = None) -> int:
                          " billed per resource and meter too)")
     co.add_argument("--refresh", action="store_true",
                     help="fetch prices (and actual cost) again instead of using the cache")
+    bd = sub.add_parser("build", parents=[per_sub], formatter_class=argparse.RawDescriptionHelpFormatter,
+                        help="render the full set of diagrams for a subscription in one go (from the cache)",
+                        description="Render a complete, browsable set from the cache: detailed and overview diagrams with every "
+                                    "security overlay, the application and context views by environment (C4, identity), and "
+                                    "focused identity variants (data-plane roles only; drift only). The steps are listed in "
+                                    "infradiag/presets.py (--dry-run prints them); a failed step does not stop the others, and "
+                                    "the exit status is non-zero if any failed. out/index.html lists the whole set.",
+                        epilog="With exactly one subscription selected, the application and context outputs go under that "
+                               "subscription's folder (out/<subscription>/applications/) so subscriptions don't overwrite each "
+                               "other; with several they are combined in out/applications/, as with `render`.\n\n"
+                               "build only renders; it never runs extract. It needs the cache from:\n"
+                               "  infradiag extract --bicep                    (what-if; drift and declared grants)\n"
+                               "  infradiag extract --azure --security         (Resource Graph, RBAC grants and role definitions)")
+    bd.add_argument("--preset", choices=sorted(PRESETS), default="full", help="which set of renders (default: full)")
+    bd.add_argument("--d2-timeout", type=_positive_int, metavar="SECONDS", default=None,
+                    help="give up on a diagram if d2's layout takes longer than this (that step fails, the rest still run)")
+    bd.add_argument("--dry-run", action="store_true", help="list the steps and the render flags each is equivalent to, then stop")
     sub.add_parser("icons", help="download the views file's icons into <cache>/icons/ (re-run to refresh)")
     args = parser.parse_args(argv)
 
@@ -458,7 +525,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "render" and args.split and args.view not in ("application", "context"):
             raise ConfigError("--split environment needs --view application or --view context")
         grant_filter = _grant_filter(args) if args.command == "render" else GrantFilter()
+        if args.command == "build" and args.dry_run:
+            for n, step in enumerate(PRESETS[args.preset], 1):
+                print(f"{n}. {step.name}: render {step.command()}")
+            return 0
         chosen, sub_names = _targets(cfg, args)
+        if args.command == "build":
+            try:
+                return _build(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress())
+            finally:
+                _refresh_nav(cfg)
         if args.command == "render" and args.view in ("application", "context"):
             try:
                 return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress(), grant_filter)
