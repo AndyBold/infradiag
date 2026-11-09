@@ -73,7 +73,7 @@ def test_render_without_d2_writes_sources_and_reports_error(tmp_path, monkeypatc
 
 def test_render_single_view(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg: calls.append(svg.name))
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: calls.append(svg.name))
     assert cli.main(setup(tmp_path) + ["render", "--view", "summary"]) == 0
     assert calls == ["summary.svg"]
 
@@ -96,7 +96,7 @@ def test_extract_reports_partial_failure(tmp_path, monkeypatch):
 def test_render_marks_failed_entry_point_resources_unverified(tmp_path, monkeypatch, capsys):
     args = setup(tmp_path)
     (tmp_path / "cache" / SUB / "whatif" / "main-dev.json").write_text(json.dumps({"error": "boom"}))
-    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg: d2.write_text(text) if d2.parent.mkdir(parents=True, exist_ok=True) is None else None)
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: d2.write_text(text) if d2.parent.mkdir(parents=True, exist_ok=True) is None else None)
     assert cli.main(args + ["render", "--view", "detailed"]) == 0
     d2 = (tmp_path / DEV_OUT / "detailed.d2").read_text()
     assert "class: unverified" in d2
@@ -108,7 +108,7 @@ ICON = "azure/Security Service Color/Key Vaults.svg"
 
 
 def capture_d2(monkeypatch):
-    def fake(text, d2, svg):
+    def fake(text, d2, svg, **kw):
         d2.parent.mkdir(parents=True, exist_ok=True)
         d2.write_text(text)
     monkeypatch.setattr(cli, "render_svg", fake)

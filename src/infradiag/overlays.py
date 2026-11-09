@@ -1,6 +1,7 @@
 """Project evidence as labelled relationships; do not infer exclusive or effective access."""
 from __future__ import annotations
 
+import re
 from collections import Counter
 from copy import deepcopy
 
@@ -10,11 +11,38 @@ from .model import Graph
 from .normalise import INLINE_CHILDREN
 from .rules import Rules, matches
 from .security import SecurityEvidence, identity_attachments, scope_contains
+from .subscriptions import subscription_label
 from .views import View, ViewEdge, ViewNode, ViewProjection
+
+SUBSCRIPTION_SCOPE = re.compile(r'^/subscriptions/([^/]+)$')
+RESOURCE_GROUP_SCOPE = re.compile(r'^/subscriptions/[^/]+/resourcegroups/[^/]+$')
+MAX_ROLES = 3
+
+
+def _listed(values, limit: int) -> str:
+    values = list(dict.fromkeys(values))
+    text = ', '.join(values[:limit])
+    return text + (f' +{len(values) - limit} more' if len(values) > limit else '')
+
+
+def grant_label(principal: str, items: list[tuple]) -> str:
+    """One compact label for every grant between a principal and a target: roles listed, provenance summarised."""
+    grants = [g for g, _tag, _name in items]
+    targets = _listed([name for _g, _tag, name in items], 2)
+    label = f'{principal} → {targets}: {_listed([g.role_name for g in grants], MAX_ROLES)}'
+    scopes = list(dict.fromkeys(g.scope for g in grants))
+    detail = [', '.join(sorted({g.source for g in grants})), ' / '.join(dict.fromkeys(t for _g, t, _n in items)),
+              f'scope: {scopes[0]}' + (f' +{len(scopes) - 1} more' if len(scopes) > 1 else '')]
+    label += '\n' + ' | '.join(detail)
+    conditions = list(dict.fromkeys(g.condition for g in grants if g.condition))
+    if conditions:
+        label += f'\ncondition: {conditions[0]}' + (f' +{len(conditions) - 1} more' if len(conditions) > 1 else '')
+    return label
 
 
 def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEvidence, *, mode: str,
-                  rules: Rules) -> View:
+                  rules: Rules, subscription_names: dict[str, str] | None = None) -> View:
+    subscription_names = subscription_names or {}
     view = deepcopy(projection.view)
     if mode == 'none':
         return view
@@ -70,6 +98,8 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                 if 'identity' in path.lower() and (normalise_id(value) == a.identity_id or
                         (value.casefold() == 'system' and '(system-assigned)' in a.name)):
                     link(mapping[a.workload], key, f'{attribution(workload)}: configured use at {path} ({a.source})', 'configured')
+        grant_edges: dict[tuple[str, str], list[tuple]] = {}
+        scope_nodes: dict[tuple[str, str], str] = {}
         for grant in evidence.grants:
             if (grant.source, grant.principal_id) in excluded_principals:
                 continue
@@ -81,13 +111,20 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                         and (scope_contains(grant.scope, rid) or (ancestor and grant.subscription == n.subscription))
                         and rid not in mapping):
                     mapping[rid] = extra(f'sr{len(nodes)}', n.name, 'Managed identity resource', 'identity_resource')
+            scope = normalise_id(grant.scope)
+            in_sub = SUBSCRIPTION_SCOPE.match(scope)
+            in_rg = RESOURCE_GROUP_SCOPE.match(scope)
+            ancestor = scope.startswith('/providers/microsoft.management/managementgroups/')
+            sub_id = (in_sub.group(1) if in_sub else grant.subscription).lower() if (in_sub or ancestor) else ''
             targets = []
             for rid in sorted(mapping):
                 n = graph.nodes[rid]
                 if n.type.startswith('microsoft.authorization/'):
                     continue
-                ancestor = grant.scope.startswith('/providers/microsoft.management/managementgroups/')
-                if scope_contains(grant.scope, rid) or (ancestor and grant.subscription == n.subscription):
+                if sub_id:
+                    if n.subscription.lower() == sub_id:
+                        targets.append(rid)
+                elif scope_contains(grant.scope, rid):
                     targets.append(rid)
             if not targets:
                 continue
@@ -101,13 +138,28 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                 if identity and not allowed(identity.id):
                     continue
                 extra(key, identity.name if identity else f'Unresolved principal {grant.principal_id}', grant.source, 'identity' if identity else 'principal')
-            for rid in targets:
-                inherited = 'inherited' if normalise_id(grant.scope) != rid else 'resource scope'
-                label = (f'{nodes[key].label} → {attribution(graph.nodes[rid])}: {grant.role_name}\n'
-                         f'{grant.source} | {inherited} | scope: {grant.scope}')
-                if grant.condition:
-                    label += f'\ncondition: {grant.condition}'
-                link(key, mapping[rid], label, 'grant')
+            # An assignment above the resources (subscription, management group) is drawn once, to a boundary
+            # node for the subscription, rather than once per resource it covers. A resource-group assignment
+            # gets the same treatment when it covers several visible elements. Resource scope stays on the resource.
+            if sub_id:
+                skey = scope_nodes.get(('subscription', sub_id))
+                if skey is None:
+                    skey = scope_nodes[('subscription', sub_id)] = extra(
+                        f'ss{len(nodes)}', subscription_label(sub_id, subscription_names.get(sub_id)), 'subscription', 'subscription')
+                tag = 'management group scope' if ancestor else 'subscription scope'
+                grant_edges.setdefault((key, skey), []).append((grant, tag, nodes[skey].label))
+            elif in_rg and len({mapping[r] for r in targets}) > 1:
+                rkey = scope_nodes.get(('resource_group', scope))
+                if rkey is None:
+                    rkey = scope_nodes[('resource_group', scope)] = extra(
+                        f'ss{len(nodes)}', graph.nodes[targets[0]].resource_group, 'resource group', 'resource_group')
+                grant_edges.setdefault((key, rkey), []).append((grant, 'resource group scope', nodes[rkey].label))
+            else:
+                for rid in targets:
+                    tag = 'resource scope' if scope == rid else 'inherited'
+                    grant_edges.setdefault((key, mapping[rid]), []).append((grant, tag, attribution(graph.nodes[rid])))
+        for (pkey, tkey), items in grant_edges.items():
+            link(pkey, tkey, grant_label(nodes[pkey].label, items), 'grant')
         view.notes.extend(c for c in evidence.coverage if c not in view.notes)
         view.notes.append('Identity overlay: attachment / configured use / RBAC grant; not effective access or observed traffic. '
                           'Bicep is declared; Azure is observed. Grants do not imply exclusive access.')

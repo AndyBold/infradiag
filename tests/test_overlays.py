@@ -28,7 +28,7 @@ def test_identity_grants_retain_provenance_scope_condition_and_do_not_claim_usag
     view = apply_overlay(projection, graph, SecurityEvidence(grants=grants), mode='identity', rules=rules)
     labels = '\n'.join(e.label for e in view.edges)
     assert 'mi-orders' in labels and 'Secrets User' in labels
-    assert 'inherited' in labels and 'condition: x' in labels
+    assert 'subscription scope' in labels and 'condition: x' in labels
     assert 'azure' in labels and 'bicep' in labels
     assert 'configured use' not in labels
     assert 'attachment' in labels
@@ -139,3 +139,88 @@ def test_unknown_principal_is_not_asserted_to_be_managed_identity():
                          mode='identity', rules=Rules())
     unknown = next(n for n in view.nodes if 'Unresolved principal user-guid' in n.label)
     assert unknown.kind == 'principal'
+
+
+def many_resource_graph(count=6):
+    return graph_from_arg([{'id': rid('rg-a', f'Microsoft.KeyVault/vaults/v{i}'), 'tags': {'application': 'Data'}}
+                           for i in range(count)] +
+                          [{'id': rid('rg-b', 'Microsoft.KeyVault/vaults/other'), 'tags': {'application': 'Data'}}])
+
+
+def grant_edges(view):
+    return [e for e in view.edges if e.kind == 'grant']
+
+
+def test_subscription_scope_grant_is_one_edge_to_a_subscription_node_not_one_per_resource():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    # components are distinct per resource, so a per-resource fan-out would draw seven edges
+    assert len({k for k in p.resources.values()}) == 7
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', f'/subscriptions/{SUB}')]),
+                         mode='identity', rules=Rules(), subscription_names={SUB: 'Contoso'})
+    edges = grant_edges(view)
+    assert len(edges) == 1
+    sub = next(n for n in view.nodes if n.kind == 'subscription')
+    assert edges[0].target == sub.key and f'Contoso ({SUB})' == sub.label
+    assert 'subscription scope' in edges[0].label
+
+
+def test_management_group_grant_targets_the_subscription_node():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    mg = '/providers/microsoft.management/managementgroups/root'
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', mg, subscription=SUB)]),
+                         mode='identity', rules=Rules())
+    edges = grant_edges(view)
+    assert len(edges) == 1 and 'management group scope' in edges[0].label
+    assert next(n for n in view.nodes if n.key == edges[0].target).kind == 'subscription'
+
+
+def test_resource_group_grant_gets_one_edge_to_a_resource_group_node():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[
+        Grant('u', 'r', 'Reader', f'/subscriptions/{SUB}/resourceGroups/rg-a')]), mode='identity', rules=Rules())
+    edges = grant_edges(view)
+    assert len(edges) == 1
+    target = next(n for n in view.nodes if n.key == edges[0].target)
+    assert (target.kind, target.label) == ('resource_group', 'rg-a')
+
+
+def test_resource_group_grant_covering_one_element_stays_on_the_resource():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[
+        Grant('u', 'r', 'Reader', f'/subscriptions/{SUB}/resourceGroups/rg-b')]), mode='identity', rules=Rules())
+    edges = grant_edges(view)
+    assert len(edges) == 1
+    assert not any(n.kind == 'resource_group' for n in view.nodes)
+
+
+def test_resource_scope_grant_stays_on_the_resource():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    scope = rid('rg-a', 'Microsoft.KeyVault/vaults/v0').lower()
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', scope)]), mode='identity', rules=Rules())
+    edges = grant_edges(view)
+    assert len(edges) == 1 and 'resource scope' in edges[0].label
+    assert not any(n.kind in ('subscription', 'resource_group') for n in view.nodes)
+
+
+def test_parallel_grants_between_the_same_pair_merge_into_one_edge_listing_roles():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    roles = [f'Role {i}' for i in range(7)]
+    grants = [Grant('u', f'r{i}', role, f'/subscriptions/{SUB}') for i, role in enumerate(roles)]
+    view = apply_overlay(p, graph, SecurityEvidence(grants=grants), mode='identity', rules=Rules())
+    (edge,) = grant_edges(view)
+    first = edge.label.splitlines()[0]
+    assert 'Role 0, Role 1, Role 2 +4 more' in first and 'Role 3' not in edge.label
+
+
+def test_distinct_principals_and_targets_stay_distinct_edges():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    grants = [Grant('u1', 'r', 'Reader', f'/subscriptions/{SUB}'), Grant('u2', 'r', 'Reader', f'/subscriptions/{SUB}')]
+    view = apply_overlay(p, graph, SecurityEvidence(grants=grants), mode='identity', rules=Rules())
+    assert len(grant_edges(view)) == 2

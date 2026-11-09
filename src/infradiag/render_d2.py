@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
+import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from textwrap import fill
+from typing import Self
 from urllib.parse import quote
 
 from .views import View, ViewNode
 
 ICON_BASE = "https://icons.terrastruct.com/"
+TICK_SECONDS = 60  # how often render_svg reports that d2 is still running
+KILL_GRACE = 10  # seconds d2 gets past its own --timeout before we kill it
 
 HEADER = """direction: right
 classes: {
@@ -48,7 +54,8 @@ def _emit(node: ViewNode, parent_path: str, depth: int, lines: list[str], paths:
         stereotype = {"application": "Application", "system": "Software system", "deployment": "Deployment node",
                       "group": "Group", "identity": "Managed identity", "principal": "Security principal",
                       "identity_resource": "Managed identity resource", "network": "Network boundary / association",
-                      "component": "Application element"}.get(node.kind, "Infrastructure node")
+                      "component": "Application element", "subscription": "Subscription",
+                      "resource_group": "Resource group"}.get(node.kind, "Infrastructure node")
         label = node.label + f"\n[{stereotype}]" + (f"\n{node.sublabel}" if node.sublabel else "")
     if node.annotations:
         label += "\n" + "\n".join(fill(a, 90) for a in node.annotations)
@@ -112,12 +119,54 @@ def render_d2(view: View, icon_href: Callable[[str], str] = icon_url, *, style: 
     return "\n".join(lines) + "\n"
 
 
-def render_svg(d2_text: str, d2_file: Path, svg_file: Path) -> None:
+def view_size(view: View) -> tuple[int, int]:
+    """(node and container count, edge count): the two numbers that decide how long ELK layout takes."""
+    def count(nodes: list[ViewNode]) -> int:
+        return sum(1 + count(n.children) for n in nodes)
+    return count(view.nodes), len(view.edges)
+
+
+class _Ticker:
+    """Calls tick(elapsed_seconds) every `interval` seconds on a daemon thread until stopped."""
+
+    def __init__(self, interval: float, tick: Callable[[float], None]):
+        self.interval, self.tick = interval, tick
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        started = time.monotonic()
+        while not self._stop.wait(self.interval):
+            self.tick(time.monotonic() - started)
+
+    def __enter__(self) -> Self:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join()
+
+
+def render_svg(d2_text: str, d2_file: Path, svg_file: Path, *, timeout: int | None = None,
+               on_tick: Callable[[float], None] | None = None, tick_interval: float = TICK_SECONDS) -> None:
+    """Lay out and draw d2_text. `timeout` (seconds) is handed to d2 and also enforced here by killing d2: d2 0.9's
+    own --timeout is not honoured during a long ELK layout (observed running on past 180s with --timeout 20). `on_tick` is called
+    with the elapsed seconds every `tick_interval` while d2 runs."""
     d2_file.parent.mkdir(parents=True, exist_ok=True)
     d2_file.write_text(d2_text)
     exe = shutil.which("d2")
     if exe is None:
         raise D2NotFound(f"d2 not installed — `brew install d2` (see https://d2lang.com). Source written to {d2_file}")
-    proc = subprocess.run([exe, "--layout", "elk", str(d2_file), str(svg_file)], capture_output=True, text=True)
+    cmd = [exe, "--layout", "elk"]
+    if timeout:
+        cmd += ["--timeout", str(timeout)]
+    cmd += [str(d2_file), str(svg_file)]
+    try:
+        with _Ticker(tick_interval, on_tick) if on_tick else nullcontext():
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + KILL_GRACE if timeout else None)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"d2 gave up on {d2_file} after {timeout}s (--d2-timeout); the view has too many nodes or "
+                           "edges to lay out. Narrow it (--subscription, a smaller --security-overlay) or raise the limit") from None
     if proc.returncode != 0:
         raise RuntimeError(f"d2 failed for {d2_file}:\n{proc.stderr.strip()}")

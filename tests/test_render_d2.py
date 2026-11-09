@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -93,3 +94,45 @@ def test_c4_long_boundary_and_permission_labels_are_wrapped():
     assert scope not in text
     assert 'Secrets User' in text
     assert 'width:' in text
+
+
+def test_view_size_counts_nested_nodes_and_edges():
+    view = View("T", [ViewNode("c0", "rg", children=[ViewNode("n0", "a"), ViewNode("n1", "b")])],
+                [ViewEdge("n0", "n1")])
+    assert r.view_size(view) == (3, 1)
+
+
+def fake_d2(monkeypatch, tmp_path, seen):
+    monkeypatch.setattr(r.shutil, "which", lambda _: "/bin/d2")
+    def run(cmd, **kw):
+        seen.append((cmd, kw))
+        time.sleep(0.25)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(r.subprocess, "run", run)
+
+
+def test_render_svg_passes_timeout_to_d2_and_enforces_it(tmp_path, monkeypatch):
+    seen = []
+    fake_d2(monkeypatch, tmp_path, seen)
+    r.render_svg("x", tmp_path / "v.d2", tmp_path / "v.svg", timeout=300)
+    cmd, kw = seen[0]
+    assert cmd[cmd.index("--timeout") + 1] == "300" and kw["timeout"] == 300 + r.KILL_GRACE
+    seen.clear()
+    r.render_svg("x", tmp_path / "v.d2", tmp_path / "v.svg")
+    assert "--timeout" not in seen[0][0] and seen[0][1]["timeout"] is None
+
+
+def test_render_svg_reports_elapsed_time_while_d2_runs(tmp_path, monkeypatch):
+    fake_d2(monkeypatch, tmp_path, [])
+    ticks = []
+    r.render_svg("x", tmp_path / "v.d2", tmp_path / "v.svg", on_tick=ticks.append, tick_interval=0.05)
+    assert len(ticks) >= 2 and ticks == sorted(ticks)
+
+
+def test_render_svg_turns_a_killed_d2_into_an_actionable_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(r.shutil, "which", lambda _: "/bin/d2")
+    def run(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+    monkeypatch.setattr(r.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="gave up .* after 30s"):
+        r.render_svg("x", tmp_path / "v.d2", tmp_path / "v.svg", timeout=30)
