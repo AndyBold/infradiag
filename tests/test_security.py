@@ -1,5 +1,5 @@
 from infradiag.normalise import graph_from_arg
-from infradiag.security import declared_security, identity_attachments, scope_contains
+from infradiag.security import declared_security, grants_from_rows, identity_attachments, scope_contains
 from tests.factories import SUB, rid
 
 
@@ -42,3 +42,35 @@ def test_declared_subscription_grant_does_not_require_resource_group_id():
     assert grant.condition == 'condition text'
     assert grant.principal_id == '[reference(unknown)]'
     assert any('unresolved' in c.lower() for c in evidence.coverage)
+
+
+TENANT_ROLE = '/providers/Microsoft.Authorization/RoleDefinitions/B24988AC-6180-42A0-AB88-20F7382DD24C'
+SUB_ROLE = f'/subscriptions/{SUB}/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c'
+
+
+def _assignment(role_id, **extra):
+    return {'type': 'microsoft.authorization/roleassignments', 'id': 'a1', 'properties': {
+        'principalId': 'P', 'scope': f'/subscriptions/{SUB}', 'roleDefinitionId': role_id, **extra}}
+
+
+def test_tenant_form_assignment_resolves_against_subscription_form_definition():
+    rows = [{'type': 'microsoft.authorization/roledefinitions', 'id': SUB_ROLE, 'properties': {'roleName': 'Contributor'}},
+            _assignment(TENANT_ROLE)]
+    evidence = grants_from_rows(rows)
+    assert [g.role_name for g in evidence.grants] == ['Contributor']
+    assert not any('name unavailable' in c for c in evidence.coverage)
+
+
+def test_absent_role_definition_still_notes_unavailable_name():
+    evidence = grants_from_rows([_assignment(TENANT_ROLE)])
+    assert evidence.grants[0].role_name == TENANT_ROLE
+    assert any('role definition name unavailable' in c for c in evidence.coverage)
+
+
+def test_tenant_and_subscription_form_duplicates_collapse():
+    named = {**_assignment(SUB_ROLE), 'roleDefinitionName': 'Contributor'}
+    for rows in ([_assignment(TENANT_ROLE), named], [named, _assignment(TENANT_ROLE)]):
+        grants = grants_from_rows(rows).grants
+        assert len(grants) == 1
+        assert grants[0].role_name == 'Contributor'
+        assert grants[0].role_id == TENANT_ROLE.lower()
