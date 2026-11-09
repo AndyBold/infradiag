@@ -140,8 +140,8 @@ def viewer_html(svg_text: str, title: str) -> str:
     return re.sub("|".join(parts), lambda m: parts[m.group(0)], _TEMPLATE)
 
 
-def write_viewer(svg_file: Path) -> Path:
-    """Write `<stem>.html` beside `svg_file` and return its path."""
+def write_viewer(svg_file: Path, title: str | None = None) -> Path:
+    """Write `<stem>.html` beside `svg_file` and return its path. `title` labels the page (default: the file stem)."""
     html_file = svg_file.with_suffix(".html")
-    html_file.write_text(viewer_html(svg_file.read_text(encoding="utf-8"), svg_file.stem), encoding="utf-8")
+    html_file.write_text(viewer_html(svg_file.read_text(encoding="utf-8"), title or svg_file.stem), encoding="utf-8")
     return html_file

@@ -146,7 +146,7 @@ def test_diff_and_render_skip_subscriptions_not_extracted(tmp_path, monkeypatch,
     capture_d2(monkeypatch)
     assert cli.main(args + ["diff"]) == 0
     assert cli.main(args + ["render"]) == 0
-    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["Contoso-Dev"]
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == ["Contoso-Dev", "index.html", "nav.js"]
     assert f"Contoso-Test ({TEST_SUB}) not extracted, skipped — run `infradiag extract --subscription {TEST_SUB}`" in capsys.readouterr().err
 
 

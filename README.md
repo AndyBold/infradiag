@@ -88,6 +88,16 @@ Explorer or from a `\\wsl.localhost\...` path in Edge. From a WSL shell:
 explorer.exe "$(wslpath -w out/Contoso-Dev/applications/application-c4-identity.html)"
 ```
 
+### Browsing everything: `out/index.html`
+
+Every `render` also rescans the whole output root and rewrites `out/index.html`, a master page with a filterable,
+collapsible list of every viewer, access table and split index page found under it (earlier runs included; deleted
+files drop out on the next render), and the selected page in a pane beside it. A page loads only when selected, the
+selection is kept in the URL hash (so refresh, links and back/forward work), and the pages themselves stay standalone,
+each with a small "all diagrams" link that opens the master page on that item. The list comes from a generated classic
+script, `out/nav.js`, because `fetch` of local JSON is blocked on `file://`; plain `.svg` files are never touched.
+Pages are discovered by content and their `<title>` is the label, so new file names appear without changes.
+
 The HTML is about as large as the SVG (the ~1 MB USA-NonProd application view gives a ~1.07 MB page). Very large
 views can pan and zoom slowly because the browser repaints every element; narrow the view if so.
 
