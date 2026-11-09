@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 
 from .ids import normalise_id, parse_id
@@ -29,6 +30,10 @@ class Node:
     entry_points: set[str] = field(default_factory=set)
     flags: set[str] = field(default_factory=set)
     managed_by: str | None = None
+
+    tags: dict[str, str] = field(default_factory=dict)
+    identity: dict = field(default_factory=dict)
+    metadata: dict[str, dict] = field(default_factory=dict)
 
     @property
     def parent_id(self) -> str | None:
@@ -70,6 +75,10 @@ class Graph:
             return node
         if not existing.properties and node.properties:
             existing.properties = node.properties
+        existing.metadata.update(deepcopy(node.metadata))
+        if AZURE in node.sources or not existing.tags:
+            existing.tags = deepcopy(node.tags)
+            existing.identity = deepcopy(node.identity)
         existing.sources |= node.sources
         existing.entry_points |= node.entry_points
         existing.flags |= node.flags
@@ -84,7 +93,8 @@ def merge_graphs(*graphs: Graph) -> Graph:
     for graph in graphs:
         for n in graph.nodes.values():
             merged.add_node(
-                replace(n, sources=set(n.sources), entry_points=set(n.entry_points), flags=set(n.flags))
+                replace(n, sources=set(n.sources), entry_points=set(n.entry_points), flags=set(n.flags),
+                        tags=deepcopy(n.tags), identity=deepcopy(n.identity), metadata=deepcopy(n.metadata))
             )
         merged.edges |= graph.edges
     return merged

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from .config import ConfigError
+
 
 def matches(value: str, patterns) -> bool:
     value = value.lower()
@@ -29,6 +31,7 @@ class NameCollapse:
 
 @dataclass(frozen=True)
 class Rules:
+    applications: dict = field(default_factory=dict)
     hide_types: tuple[str, ...] = ()
     hide_managed: bool = False
     hide_edges_to_types: tuple[str, ...] = ()
@@ -52,6 +55,7 @@ def load_rules(path: Path) -> Rules:
     data = yaml.safe_load(Path(path).read_text()) or {}
     summary = data.get("summary") or {}
     return Rules(
+        applications=_applications(data.get("applications", {})),
         hide_types=_lower(data.get("hide_types")),
         hide_managed=bool(data.get("hide_managed", False)),
         hide_edges_to_types=_lower(data.get("hide_edges_to_types")),
@@ -68,3 +72,30 @@ def load_rules(path: Path) -> Rules:
         summary_collapse_names=tuple(NameCollapse(c["pattern"], c["label"])
                                      for c in summary.get("collapse_names") or []),
     )
+
+
+def _applications(raw) -> dict:
+    allowed = {'application_tag', 'environment_tag', 'annotations', 'overrides'}
+    if not isinstance(raw, dict) or set(raw) - allowed:
+        raise ConfigError('applications: expected mapping with application_tag, environment_tag, annotations, overrides')
+    for key in ('application_tag', 'environment_tag'):
+        if key in raw and (not isinstance(raw[key], str) or not raw[key].strip()):
+            raise ConfigError(f'applications.{key}: expected nonempty string')
+    if not isinstance(raw.get('annotations', []), list) or any(not isinstance(x, str) for x in raw.get('annotations', [])):
+        raise ConfigError('applications.annotations: expected list of tag names')
+    if not isinstance(raw.get('overrides', []), list):
+        raise ConfigError('applications.overrides: expected list')
+    for i, rule in enumerate(raw.get('overrides', [])):
+        where = f'applications.overrides[{i}]'
+        if not isinstance(rule, dict) or set(rule) - {'match', 'application', 'environment', 'group', 'shared', 'component', 'role'}:
+            raise ConfigError(f'{where}: unknown key or expected mapping')
+        selector = rule.get('match')
+        if not isinstance(selector, dict) or not selector or set(selector) - {'name', 'type', 'subscription'}:
+            raise ConfigError(f'{where}.match: expected name, type or subscription selectors')
+        if any(not isinstance(v, str) or not v.strip() for v in selector.values()):
+            raise ConfigError(f'{where}.match: selectors must be nonempty strings')
+        if 'shared' in rule and not isinstance(rule['shared'], bool):
+            raise ConfigError(f'{where}.shared: expected boolean')
+        if any(not isinstance(v, str) or not v.strip() for k, v in rule.items() if k not in ('match', 'shared')):
+            raise ConfigError(f'{where}: override values must be nonempty strings')
+    return raw

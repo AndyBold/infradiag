@@ -117,6 +117,123 @@ Icons are paths on [icons.terrastruct.com](https://icons.terrastruct.com/). The 
 
 An icon in the views file can also be a path to your own SVG, relative to the views file (e.g. `icons/container-apps.svg`). The path must not contain spaces, because d2 can't bundle such files.
 
+## C4 and application views
+
+View level, presentation and security overlay are independent runtime choices:
+
+```bash
+infradiag render --view detailed --style c4
+infradiag render --view application --style c4
+infradiag render --view context --style c4 --subscription Nonprod
+infradiag extract --azure --security
+infradiag render --view application --style c4 --security-overlay identity
+infradiag render --view detailed --security-overlay network
+infradiag render --view context --style c4 --security-overlay all
+```
+
+`--style azure|c4` defaults to `azure`. C4 uses labelled elements, technology descriptions,
+nested boundaries and a legend, rendered through the existing D2/ELK pipeline. This is C4
+presentation for deployment and application views; it does not invent business systems,
+people or interaction protocols from Azure infrastructure. C4 presentation uses text and
+shapes without fetching icons.
+
+| View | Content | Output folder |
+|---|---|---|
+| `detailed` | Individual resources and deployment topology | `out/<subscription>/` |
+| `summary` | Existing grouped infrastructure overview | `out/<subscription>/` |
+| `application` | Applications containing APIs, workers, stores and supporting resources | `out/applications/` |
+| `context` | Applications collapsed into systems, with shared and external dependencies | `out/applications/` |
+| `all` (default) | Existing detailed and summary pair | `out/<subscription>/` |
+
+Application/context views combine the **selected, extracted subscriptions**. Repeat
+`--subscription` to select several. Grouping defaults to subscription + environment +
+application, so an identically named application in dev and production remains separate.
+Tag keys and grouping comparisons ignore case; labels retain tag spelling. Missing tags
+produce `Unclassified infrastructure` or environment `unspecified`. Refresh `extract` if
+caches predate tag extraction. No resource-group tag inheritance is assumed.
+
+Variants have distinct names: `detailed-c4.svg`, `application-c4-identity.svg`,
+`context-c4-all.svg`; their `.d2` sources sit alongside. Default output names stay unchanged.
+Each variant is overwritten on rerun, including when the subscription selection changes.
+
+### Application mapping rules
+
+Configure `applications` in `views.yaml`. Unmatched resources use tags. Override rules use
+fnmatch patterns; all supplied selectors must match, and the **first matching rule wins**.
+Selectors are resource `name`, ARM `type` and subscription **ID**, compared without case.
+Unknown keys or malformed application rules are rejected.
+
+```yaml
+applications:
+  application_tag: application
+  environment_tag: environment
+  annotations: [department, owner, dataClassification]
+  overrides:
+    - match: {name: "orders-api-*", type: "microsoft.app/containerapps"}
+      role: API
+    - match: {name: "orders-worker-*"}
+      role: Worker
+    - match: {name: "shared-registry-*"}
+      application: Shared platform
+      environment: shared
+      shared: true
+    - match: {name: "global-config-*"}
+      application: Configuration
+      group: global-configuration   # explicitly permits cross-subscription grouping
+      environment: shared
+      shared: true
+      component: Configuration service
+    - match: {name: "legacy-worker-*"}
+      application: Orders           # override a missing/incorrect application tag
+      environment: dev
+      role: Worker
+      component: Legacy workers     # explicitly collapse matching replicas per application
+```
+
+Without `component`, application views keep resources separate. `role` supplies a component
+role without changing membership. Known job/database types receive basic worker/store
+labels; ambiguous resources retain their technology type. Explicit `group` replaces the
+subscription part of the grouping key, but environment and application still distinguish
+groups. Combine any membership and role overrides in the same rule when both are needed.
+
+Annotations are optional. Aggregate annotations show mixed values explicitly rather than
+choosing an arbitrary owner or classification. `dataClassification` describes sensitivity;
+it is not evidence that an access restriction is enforced. Shared services can use an
+explicit shared application boundary, retaining dependencies to consuming applications.
+
+### Security overlays and coverage
+
+`--security-overlay none|identity|network|all` defaults to `none` and works with either
+style and every view. Purple relationships distinguish **identity attachment**, explicit
+**configured use**, and **RBAC grants**. Role labels retain named identity, role, scope,
+conditions and Azure/Bicep provenance. Aggregated views retain workload names in security
+relationships or annotations when the endpoints collapse into the same visible element.
+An endpoint reference by itself does not establish which identity authenticates a call.
+
+`extract --security` performs additional read-only queries for visible role assignments and
+role definitions, including a visible inherited-assignment query. It works with ordinary
+extraction or `--azure`, and cannot combine with `--bicep`. Security evidence is stored in a
+separate versioned `security.json` cache per subscription. No security queries happen unless
+requested. Rendering uses cached Azure/Bicep security information; absent, failed or partial
+reads produce coverage notes. Re-extract to refresh grants. Azure reflects deployed
+configuration; Bicep what-if reflects declared configuration, and neither establishes runtime
+traffic. What-if expressions that cannot be resolved stay qualified as unresolved.
+
+Network overlays use teal supporting nodes/relationships for VNets, subnets, NSG associations
+and private endpoint connections. Public network access is displayed independently, including
+`unknown` when absent. VNet integration is an association, not physical workload containment;
+network overlay mode corrects the legacy detailed view's placement for those consumers.
+Normally hidden security objects can support an overlay, while explicit out-of-scope name
+filters and managed-resource exclusions remain respected.
+
+This is a visualization of **visible configuration**, not an effective-access audit. Grants
+are not proof of exclusive access. Account visibility and ancestor coverage may be partial;
+group expansion, deny assignments, SQL users, Key Vault access policies and other
+service-specific authorization are outside the initial RBAC overlay. Firewall rule evaluation,
+actual traffic and runtime routing are not evaluated. No returned grant means no visible
+cached evidence, not no access. System-assigned identities are named after their workload;
+unresolved principals/roles retain their IDs.
+
 ## Cost
 
 `cost` estimates each subscription's monthly cost per environment from the [Azure Retail Prices API](https://learn.microsoft.com/rest/api/cost-management/retail-prices/azure-retail-prices). Each resource group is one environment, and shared resource groups get their own row. Estimates use pay-as-you-go list prices, so they leave out discounts, reservations, savings plans and free grants. It prices everything `extract` found, including Bicep resources not yet in Azure (shown as planned). Resource types are mapped to price meters by SKU and size in `src/infradiag/cost.py`. Anything unmapped, or billed by usage you haven't stated, is listed under "Not estimated" with the reason rather than guessed.

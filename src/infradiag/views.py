@@ -22,6 +22,9 @@ class ViewNode:
     icon: str | None = None
     style: str = "normal"
     children: list[ViewNode] = field(default_factory=list)
+    resource_ids: tuple[str, ...] = ()
+    kind: str = "resource"
+    annotations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, order=True)
@@ -30,6 +33,7 @@ class ViewEdge:
     target: str
     label: str = ""
     style: str = "solid"
+    kind: str = "dependency"
 
 
 @dataclass
@@ -37,6 +41,31 @@ class View:
     title: str
     nodes: list[ViewNode]
     edges: list[ViewEdge]
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ViewProjection:
+    view: View
+    resources: dict[str, str]
+
+
+def project(view: View, graph: Graph) -> ViewProjection:
+    resources = {}
+    def walk(nodes):
+        for n in nodes:
+            resources.update((rid, n.key) for rid in n.resource_ids)
+            walk(n.children)
+    walk(view.nodes)
+    # Map hidden child resources to their closest visible ancestor.
+    for rid, n in graph.nodes.items():
+        parent = n.parent_id
+        while parent and parent not in resources:
+            node = graph.nodes.get(parent)
+            parent = node.parent_id if node else None
+        if rid not in resources and parent in resources:
+            resources[rid] = resources[parent]
+    return ViewProjection(view, resources)
 
 
 def short_type(resource_type: str) -> str:
@@ -113,7 +142,7 @@ def build_detailed(graph: Graph, rules: Rules, title: str = "Detailed topology",
     keys = {rid: f"n{i}" for i, rid in enumerate(ids)}
     vnodes = {
         rid: ViewNode(keys[rid], g.nodes[rid].name, short_type(g.nodes[rid].type),
-                      rules.icons.get(g.nodes[rid].type), style(g.nodes[rid]))
+                      rules.icons.get(g.nodes[rid].type), style(g.nodes[rid]), resource_ids=(rid,))
         for rid in ids
     }
 
@@ -139,7 +168,7 @@ def build_detailed(graph: Graph, rules: Rules, title: str = "Detailed topology",
 
     def container(cid: str, label: str, sublabel: str, icon: str | None, parent: ViewNode | None) -> ViewNode:
         if cid not in containers:
-            containers[cid] = ViewNode(f"c{len(containers)}", label, sublabel, icon)
+            containers[cid] = ViewNode(f"c{len(containers)}", label, sublabel, icon, kind="deployment")
             (parent.children if parent else roots).append(containers[cid])
         return containers[cid]
 
@@ -206,7 +235,7 @@ def build_summary(graph: Graph, rules: Rules, title: str = "Architecture overvie
     for r, ids in members.items():
         first = keep[ids[0]]
         label = f"{r.split(':', 1)[1]} ×{len(ids)}" if r.startswith("collapse:") else first.name
-        vnodes[r] = ViewNode(keys[r], label, short_type(first.type), rules.icons.get(first.type))
+        vnodes[r] = ViewNode(keys[r], label, short_type(first.type), rules.icons.get(first.type), resource_ids=tuple(ids))
 
     nest: dict[str, str] = {}
     for e in sorted(g.edges):
@@ -224,7 +253,7 @@ def build_summary(graph: Graph, rules: Rules, title: str = "Architecture overvie
 
     order = [name for name, _ in rules.summary_groups] + ["Other"]
     roots = [
-        ViewNode(f"g{i}", name, children=grouped[name])
+        ViewNode(f"g{i}", name, children=grouped[name], kind="group")
         for i, name in enumerate(n for n in order if n in grouped)
     ]
 
