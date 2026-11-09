@@ -78,7 +78,8 @@ def test_configured_rules_replace_the_defaults_and_can_target_the_resource_group
 
 
 @pytest.mark.parametrize('rule', [
-    {'pattern': '(', 'environment': 'x'}, {'pattern': 'a', 'environment': r'\1'}, {'pattern': 'a'},
+    {'pattern': '(', 'environment': 'x'}, {'pattern': 'a', 'environment': r'\1'}, {'pattern': '(a)', 'environment': r'\g<2>'},
+    {'pattern': '(a)', 'environment': r'\q'}, {'pattern': '(a)', 'environment': r'x\g<n>'}, {'pattern': 'a'},
     {'pattern': 'a', 'environment': 'x', 'on': ['tags']}, {'pattern': 'a', 'environment': 'x', 'extra': 1}, 'dev'])
 def test_bad_environment_rules_are_rejected(rule):
     with pytest.raises(ConfigError, match='environment_rules'):

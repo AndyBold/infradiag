@@ -125,11 +125,13 @@ def _environment_rules(rules) -> None:
         if any(not isinstance(rule.get(k), str) or not rule[k].strip() for k in ('pattern', 'environment')):
             raise ConfigError(f'{where}: pattern and environment must be nonempty strings')
         try:
-            groups = re.compile(rule['pattern']).groups
+            compiled = re.compile(rule['pattern'])
         except re.error as exc:
             raise ConfigError(f'{where}.pattern: not a regular expression: {exc}') from None
-        if any(int(g) > groups for g in re.findall(r'\\(\d+)', rule['environment'])):
-            raise ConfigError(f'{where}.environment: refers to a group the pattern does not have')
+        try:
+            compiled.sub(rule['environment'], '')  # compiles the whole replacement template: \1, \g<name>, bad escapes
+        except (re.error, IndexError) as exc:
+            raise ConfigError(f'{where}.environment: not a valid replacement for the pattern: {exc}') from None
         if 'on' in rule and (not isinstance(rule['on'], list) or not rule['on']
                              or set(rule['on']) - {'name', 'resource_group'}):
             raise ConfigError(f'{where}.on: expected a list of name, resource_group')

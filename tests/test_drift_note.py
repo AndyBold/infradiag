@@ -99,7 +99,8 @@ def test_the_note_is_decided_per_environment_diagram_after_a_split():
     graph = graph_from_arg([{'id': rid('rg-a', f'Microsoft.KeyVault/vaults/{n}'), 'tags': {'application': 'Data', 'environment': env}}
                             for n, env in (('a', 'dev0'), ('b', 'qa'))])
     p = build_application(graph, Rules(), level='application', subscription_names={})
-    vault = lambda n: rid('rg-a', f'Microsoft.KeyVault/vaults/{n}').lower()
+    def vault(n):
+        return rid('rg-a', f'Microsoft.KeyVault/vaults/{n}').lower()
     grants = [Grant(f'u{i}', 'r', 'Reader', vault('a'), source='azure') for i in range(6)] + [
         Grant(f'q{i}', 'r', 'Reader', vault('b'), source='bicep') for i in range(6)]
     view = apply_overlay(p, graph, SecurityEvidence(grants=grants), mode='identity', rules=Rules())
