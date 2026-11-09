@@ -239,3 +239,88 @@ def test_grant_drawn_to_a_scope_node_leaves_no_disconnected_identity_resource_no
     assert not any(n.kind == 'identity_resource' for n in view.nodes)
     connected = {e.source for e in view.edges} | {e.target for e in view.edges}
     assert all(n.key in connected for n in view.nodes if n.kind in ('subscription', 'resource_group', 'principal'))
+
+
+def declared_and_observed(*, in_bicep=True, in_azure=True, attach_in=('bicep', 'azure')):
+    """An API and its user-assigned identity as what-if declares them (no principal ID: it is only known after
+    deployment) and as Resource Graph observes them (principal ID filled in)."""
+    from infradiag.model import merge_graphs
+    from infradiag.normalise import graph_from_whatif
+    mi, api = (rid('rg-a', p) for p in ('Microsoft.ManagedIdentity/userAssignedIdentities/mi-orders',
+                                         'Microsoft.App/containerApps/api'))
+    declared = [{'changeType': 'NoChange', 'resourceId': api, 'after': {
+        'id': api, 'name': 'api', 'tags': {'application': 'Orders'}, 'properties': {},
+        'identity': {'type': 'UserAssigned', 'userAssignedIdentities': {mi: {}} if 'bicep' in attach_in else {}}}}]
+    observed = [{'id': api, 'tags': {'application': 'Orders'}, 'identity': {
+        'type': 'UserAssigned',
+        'userAssignedIdentities': {mi: {'principalId': 'P-1'}} if 'azure' in attach_in else {}}}]
+    if in_bicep:
+        declared.append({'changeType': 'NoChange', 'resourceId': mi,
+                         'after': {'id': mi, 'name': 'mi-orders', 'properties': {}}})
+    if in_azure:
+        observed.append({'id': mi, 'properties': {'principalId': 'P-1'}})
+    bicep, _ = graph_from_whatif({'app': {'status': 'Succeeded', 'changes': declared}})
+    return merge_graphs(bicep, graph_from_arg(observed)), mi.lower()
+
+
+def identity_nodes(view):
+    return [n for n in view.nodes if n.kind in ('identity', 'principal')]
+
+
+def application_overlay(graph, grants=()):
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    return apply_overlay(p, graph, SecurityEvidence(grants=list(grants)), mode='identity', rules=Rules())
+
+
+def test_declared_and_observed_copies_of_an_identity_are_one_node_with_both_provenances():
+    # Regression: USA-NonProd drew mi-app-api-usa-dev0-scus twice, as `azure | principal: <guid>` and
+    # `bicep | principal: unknown`, because overlay nodes were keyed by (source, principal or identity ID).
+    graph, _mi = declared_and_observed()
+    view = application_overlay(graph)
+    (node,) = identity_nodes(view)
+    assert node.label == 'mi-orders'
+    assert node.sublabel == 'azure, bicep | principal: p-1'
+    attachments = [e for e in view.edges if e.kind == 'attachment']
+    assert len(attachments) == 1 and attachments[0].label.endswith('attachment (azure, bicep)')
+
+
+def test_grants_from_either_source_reach_the_same_identity_by_principal_id():
+    graph, _mi = declared_and_observed()
+    vault = rid('rg-a', 'Microsoft.KeyVault/vaults/vault').lower()
+    graph.nodes.update(graph_from_arg([{'id': vault, 'tags': {'application': 'Data'}}]).nodes)
+    # what-if resolves an existing identity's principal ID in a role assignment even though the identity's own
+    # after-state omits it; Resource Graph sees the same assignment.
+    grants = [Grant('p-1', 'r', 'Secrets User', vault, source=s) for s in ('azure', 'bicep')]
+    view = application_overlay(graph, grants)
+    (node,) = identity_nodes(view)
+    (edge,) = [e for e in view.edges if e.kind == 'grant']
+    assert edge.source == node.key and 'mi-orders' in edge.label and 'azure, bicep' in edge.label
+
+
+def test_unresolved_principal_granted_in_both_sources_is_one_node():
+    graph, _mi = declared_and_observed()
+    vault = rid('rg-a', 'Microsoft.KeyVault/vaults/vault').lower()
+    graph.nodes.update(graph_from_arg([{'id': vault, 'tags': {'application': 'Data'}}]).nodes)
+    view = application_overlay(graph, [Grant('user-guid', 'r', 'Reader', vault, source=s) for s in ('azure', 'bicep')])
+    unresolved = [n for n in identity_nodes(view) if n.kind == 'principal']
+    assert [(n.label, n.sublabel) for n in unresolved] == [('Unresolved principal user-guid', 'azure, bicep')]
+
+
+@pytest.mark.parametrize('in_bicep, in_azure, attach_in, sublabel, attachment', [
+    (True, False, ('bicep',), 'bicep | principal: unknown', 'attachment (bicep)'),
+    (False, True, ('azure',), 'azure | principal: p-1', 'attachment (azure)'),
+    (True, True, ('azure',), 'azure, bicep | principal: p-1', 'attachment (azure)'),
+])
+def test_identity_drift_between_sources_stays_visible(in_bicep, in_azure, attach_in, sublabel, attachment):
+    graph, _mi = declared_and_observed(in_bicep=in_bicep, in_azure=in_azure, attach_in=attach_in)
+    view = application_overlay(graph)
+    (node,) = identity_nodes(view)
+    assert node.sublabel == sublabel
+    assert [e.label.split(': ', 1)[1] for e in view.edges if e.kind == 'attachment'] == [attachment]
+
+
+def test_identity_bicep_references_but_does_not_declare_keeps_bicep_provenance():
+    # e.g. a shared identity in another resource group that the template attaches as an `existing` resource
+    graph, _mi = declared_and_observed(in_bicep=False)
+    (node,) = identity_nodes(application_overlay(graph))
+    assert node.sublabel == 'azure, bicep | principal: p-1'
