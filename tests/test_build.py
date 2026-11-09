@@ -5,7 +5,7 @@ import pytest
 from infradiag import cli, nav
 from infradiag.presets import FULL, PRESETS
 from tests.factories import SUB, fake_svg
-from tests.test_cli import TEST_SUB, capture_d2, setup
+from tests.test_cli import capture_d2, setup
 
 
 def run(args, extra=()):
@@ -18,9 +18,9 @@ def test_full_preset_covers_the_requested_renders():
     assert "--view summary --security-overlay all" in flags
     assert "--view application --style c4 --security-overlay identity --split environment" in flags
     assert "--view context --style c4 --security-overlay identity --split environment" in flags
-    assert "--view detailed --security-overlay identity --hide-scope subscription --hide-scope management-group " \
-           "--role-plane data" in flags
-    assert "--view detailed --security-overlay identity --drift-only" in flags
+    assert "--view application --style c4 --security-overlay identity --split environment " \
+           "--hide-scope subscription --hide-scope management-group --role-plane data" in flags
+    assert "--view application --style c4 --security-overlay identity --split environment --drift-only" in flags
     assert PRESETS["full"] is FULL
 
 
@@ -38,8 +38,8 @@ def test_one_subscription_gets_its_own_application_folder_and_one_nav_group(tmp_
     out = tmp_path / "out"
     mine = out / "Contoso-Dev"
     assert (mine / "detailed-all.svg").exists() and (mine / "summary-all.svg").exists()
-    assert (mine / "detailed-identity-no-sub-no-mg-data.svg").exists()
-    assert (mine / "detailed-identity-drift.svg").exists()
+    assert (mine / "applications/application-c4-identity-no-sub-no-mg-data-index.html").exists()
+    assert (mine / "applications/application-c4-identity-drift-index.html").exists()
     assert (mine / "applications/application-c4-identity-index.html").exists()
     assert (mine / "applications/context-c4-identity-index.html").exists()
     assert not (out / "applications").exists()
@@ -77,7 +77,7 @@ def test_a_failed_step_does_not_stop_the_rest_and_the_exit_is_non_zero(tmp_path,
     assert "d2 gave up" in text.err
     mine = tmp_path / "out/Contoso-Dev"
     assert (mine / "detailed-all.svg").exists() and (mine / "applications/context-c4-identity-index.html").exists()
-    assert (mine / "detailed-identity-drift.svg").exists()
+    assert (mine / "applications/application-c4-identity-drift-index.html").exists()
     assert (tmp_path / "out/index.html").exists()  # master page refreshed after a failure
 
 

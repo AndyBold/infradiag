@@ -50,10 +50,11 @@ class BuildStep:
 
 # Focused variants: the same grants, drawn less. Each lands beside the full diagram under a filter suffix.
 FOCUSED_VARIANTS: tuple[BuildStep, ...] = (
-    BuildStep("detailed, data-plane roles only, no subscription/management-group grants", "detailed",
-              overlay="identity", hide_scopes=("subscription", "management-group"), role_plane="data"),
-    BuildStep("detailed, drift only (grants one source evidences alone)", "detailed",
-              overlay="identity", drift_only=True),
+    BuildStep("application view, data-plane roles only, no subscription/management-group grants", "application",
+              style="c4", overlay="identity", split="environment", hide_scopes=("subscription", "management-group"),
+              role_plane="data"),
+    BuildStep("application view, drift only (grants one source evidences alone)", "application",
+              style="c4", overlay="identity", split="environment", drift_only=True),
 )
 
 FULL: tuple[BuildStep, ...] = (

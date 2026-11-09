@@ -106,8 +106,8 @@ runs `extract`) and reads the cache, so it needs both extracts above. The steps 
 2. architecture overview, `--security-overlay all`
 3. application view, `--style c4 --security-overlay identity --split environment`
 4. context view, same flags
-5. focused variants: detailed with data-plane roles only and subscription/management-group grants hidden;
-   detailed with `--drift-only`
+5. focused variants, each an application view as in step 3: data-plane roles only with subscription and
+   management-group grants hidden; `--drift-only`
 
 The steps are data in `src/infradiag/presets.py`: add a `BuildStep` to `FOCUSED_VARIANTS` (or `FULL`) to add a diagram.
 
