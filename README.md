@@ -211,7 +211,8 @@ relationships or annotations when the endpoints collapse into the same visible e
 An endpoint reference by itself does not establish which identity authenticates a call.
 
 `extract --security` performs additional read-only queries for visible role assignments and
-role definitions, including a visible inherited-assignment query. It works with ordinary
+role definitions (built-in role names are looked up per role with `az role definition list`),
+including a visible inherited-assignment query. It works with ordinary
 extraction or `--azure`, and cannot combine with `--bicep`. Security evidence is stored in a
 separate versioned `security.json` cache per subscription. No security queries happen unless
 requested. Rendering uses cached Azure/Bicep security information; absent, failed or partial
