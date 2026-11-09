@@ -2,6 +2,7 @@ import io
 
 from infradiag import cli
 from infradiag.progress import Progress
+from tests.factories import fake_svg
 from tests.test_cli import setup
 
 
@@ -43,7 +44,7 @@ def test_clear_is_a_noop_with_nothing_on_screen():
 
 
 def test_render_reports_phases_on_stderr_and_keeps_stdout_clean(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: None)
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: fake_svg(svg))
     assert cli.main(setup(tmp_path) + ["render", "--subscription", "Contoso-Dev"]) == 0
     captured = capsys.readouterr()
     assert "loading cache and building graphs" in captured.err
@@ -54,7 +55,7 @@ def test_render_reports_phases_on_stderr_and_keeps_stdout_clean(tmp_path, monkey
 
 
 def test_render_application_reports_per_subscription_progress(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: None)
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: fake_svg(svg))
     args = setup(tmp_path, test_sub=True)
     assert cli.main(args + ["render", "--view", "application", "--style", "c4",
                             "--security-overlay", "none"]) in (0, 2)
@@ -65,7 +66,7 @@ def test_render_application_reports_per_subscription_progress(tmp_path, monkeypa
 
 def test_render_reports_view_size_before_layout_and_passes_timeout(tmp_path, monkeypatch, capsys):
     seen = []
-    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: seen.append(kw))
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: fake_svg(svg, record=lambda _: seen.append(kw)))
     assert cli.main(setup(tmp_path) + ["render", "--view", "summary", "--d2-timeout", "90"]) == 0
     err = capsys.readouterr().err
     assert "d2: laying out summary.svg: " in err and " nodes/containers, " in err and " edges" in err
@@ -77,7 +78,7 @@ def test_large_edge_count_warns_on_stderr_before_layout(tmp_path, monkeypatch, c
     from infradiag.views import View, ViewEdge, ViewNode
     nodes = [ViewNode(f"n{i}", f"n{i}") for i in range(3)]
     edges = [ViewEdge("n0", "n1", f"e{i}") for i in range(cli.EDGE_WARN + 1)]
-    monkeypatch.setattr(cli, "render_svg", lambda *a, **kw: None)
+    monkeypatch.setattr(cli, "render_svg", lambda text, d2, svg, **kw: fake_svg(svg))
     cli._d2_svg(Progress(io.StringIO()), "x", tmp_path / "v.d2", tmp_path / "v.svg", View("T", nodes, edges))
     captured = capsys.readouterr()
     assert f"{cli.EDGE_WARN + 1} edges" in captured.err and "--d2-timeout" in captured.err and captured.out == ""

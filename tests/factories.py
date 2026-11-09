@@ -33,3 +33,11 @@ def arg_row(resource_id: str, name: str | None = None, properties: dict | None =
             managed_by: str = "") -> dict:
     return {"id": resource_id, "name": name or resource_id.rsplit("/", 1)[-1],
             "type": "", "properties": properties or {}, "managedBy": managed_by}
+
+
+def fake_svg(svg, *rest, record=None):
+    """Stand-in for render_svg that writes a tiny SVG (as d2 would), so the viewer written beside it has input."""
+    svg.parent.mkdir(parents=True, exist_ok=True)
+    svg.write_text('<?xml version="1.0" encoding="utf-8"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>')
+    if record is not None:
+        record(svg)

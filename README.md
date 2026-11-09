@@ -5,7 +5,7 @@ Architecture diagrams, a drift report and cost estimates for an Azure platform d
 infradiag previews your Bicep deployments with `az deployment sub what-if`, reads what is actually deployed from Azure Resource Graph, and compares the two. From that it writes, per subscription:
 
 - `drift-report.md`: resources in Azure but not in Bicep and the reverse, properties the next deployment would change, and reference differences.
-- `detailed.svg` and `summary.svg`: a topology diagram (subscription → resource group → resource, with subnets and references) and an architecture overview grouped by role. Their `.d2` sources are written alongside.
+- `detailed.svg` and `summary.svg`: a topology diagram (subscription → resource group → resource, with subnets and references) and an architecture overview grouped by role. Their `.d2` sources and a zoomable `.html` viewer (see [Viewing large diagrams](#viewing-large-diagrams)) are written alongside.
 - `cost-report.md` and `.json`: monthly list-price estimates per resource group, plus actual spend if you ask for it.
 
 It only reads from Azure. what-if, Resource Graph and Cost Management queries change nothing, and infradiag never writes into your Bicep project.
@@ -65,6 +65,30 @@ infradiag render --subscription my-dev-subscription --subscription 00000000-0000
 Each subscription gets its own folder, so runs don't overwrite each other: `out/<subscription name>/` (made path-safe, with the ID appended if two subscriptions share a name) and `cache/<subscription id>/`. `extract` also writes `cache/subscriptions.json`, the subscriptions it found. That lets `diff`, `render` and `cost` run offline from `cache/`, so you can iterate on `views.yaml` without re-extracting. Without `--subscription` they skip subscriptions that haven't been extracted yet. Diagrams label each subscription `<name> (<id>)`.
 
 Subscription names and IDs come from `az login` (`az account list`), never from config. The config names a subscription (display name or ID) only to give it settings, matched at run time; one you can't see is skipped with a note. A subscription with no Bicep entry points in the config is drawn from Azure only, from every resource group unless it lists some, with no what-if and no drift comparison. Its drift report says so, and its diagram titles end in "(Azure only)".
+
+## Viewing large diagrams
+
+Browsers cap zoom (Edge stops at 500%), which is not enough for the big application views. For every SVG it writes,
+`infradiag render` also writes a sibling `<name>.html` viewer and prints its path under the SVG's:
+
+```text
+out/Contoso-Dev/applications/application-c4-identity.svg
+out/Contoso-Dev/applications/application-c4-identity.html
+```
+
+The viewer fills the browser window. Scroll or pinch to zoom without a limit (the SVG stays vector-sharp), drag to pan,
+double-click to zoom in, and use the **+**, **−**, **Fit** and **1:1** buttons (or the keys `+`, `-`, `F`, `0`).
+It is a single self-contained file: the SVG and a vendored copy of
+[svg-pan-zoom](https://github.com/bumbu/svg-pan-zoom) (BSD-2-Clause, version and source in
+`src/infradiag/vendor/README.md`) are inlined, so it needs no network and no server. Open it with a double-click in
+Explorer or from a `\\wsl.localhost\...` path in Edge. From a WSL shell:
+
+```sh
+explorer.exe "$(wslpath -w out/Contoso-Dev/applications/application-c4-identity.html)"
+```
+
+The HTML is about as large as the SVG (the ~1 MB USA-NonProd application view gives a ~1.07 MB page). Very large
+views can pan and zoom slowly because the browser repaints every element; narrow the view if so.
 
 ## Config reference (`infradiag.yaml`)
 

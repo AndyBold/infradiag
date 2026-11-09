@@ -33,6 +33,7 @@ from .render_d2 import D2NotFound, render_d2, render_svg, view_size
 from .rules import load_rules
 from .security import SecurityEvidence, declared_security
 from .subscriptions import SubscriptionError, discover, folder_names, load_subscriptions, select, write_subscriptions
+from .viewer import write_viewer
 from .views import View, build_detailed, build_summary, project
 
 VIEWS = {"detailed": "Detailed topology", "summary": "Architecture overview"}
@@ -216,6 +217,7 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
         _d2_svg(progress, render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg",
                 view, d2_timeout)
         print(cfg.out_dir / f"{stem}.svg")
+        print(write_viewer(cfg.out_dir / f"{stem}.svg"))
     if icons.missing:
         print(f"note: {len(icons.missing)} icon(s) not cached locally, fetched from the internet — "
               "run `infradiag icons` to cache them", file=sys.stderr)
@@ -264,6 +266,7 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg', view,
             args.d2_timeout)
     print(out / f'{stem}.svg')
+    print(write_viewer(out / f'{stem}.svg'))
     for note in failures:
         print(f'warning: {note}', file=sys.stderr)
     return 2 if failures else 0
