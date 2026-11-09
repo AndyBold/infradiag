@@ -31,13 +31,20 @@ def _role_label(name: str) -> str:
     return name.rsplit('/', 1)[-1] if name.startswith('/') else name
 
 
+def _only(sources) -> str:
+    """Provenance on a label only when one source alone evidences the edge (drift); both sources go on the hover."""
+    return f' ({next(iter(sources))} only)' if len(set(sources)) == 1 else ''
+
+
 def grant_label(principal: str, items: list[tuple]) -> str:
     """The short edge label for every grant between a principal and a target: roles, then sources and scope kind.
 
     The edge already joins the principal to the target, so neither is repeated. Everything long (principal and target
     names, every role and scope, conditions) is in grant_tooltip, shown on hover."""
     grants = [g for g, _tag, _name in items]
-    detail = [', '.join(sorted({g.source for g in grants})), ' / '.join(dict.fromkeys(t for _g, t, _n in items))]
+    sources = {g.source for g in grants}
+    detail = [*([f'{next(iter(sources))} only'] if len(sources) == 1 else []),
+              ' / '.join(dict.fromkeys(t for _g, t, _n in items))]
     if any(g.condition for g in grants):
         detail.append('conditional')
     return _listed([_role_label(g.role_name) for g in grants], MAX_ROLES) + '\n' + ' | '.join(detail)
@@ -51,6 +58,7 @@ def grant_tooltip(principal: str, items: list[tuple]) -> str:
     conditions = list(dict.fromkeys(g.condition for g in grants if g.condition))
     lines = [f'{principal} → {", ".join(targets)}',
              'Roles: ' + ', '.join(dict.fromkeys(g.role_name for g in grants)),
+             'Sources: ' + ', '.join(sorted({g.source for g in grants})),
              ('Scope: ' + scopes[0]) if len(scopes) == 1 else 'Scopes:\n' + '\n'.join(scopes)]
     if conditions:
         lines.append('Condition: ' + conditions[0] if len(conditions) == 1 else 'Conditions:\n' + '\n'.join(conditions))
@@ -119,7 +127,7 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
             if principal:
                 pids.add(principal)
             return key
-        uses: dict[tuple[str, str, str, str], set[str]] = {}
+        uses: dict[tuple[str, str, str, str], tuple[set[str], list[str]]] = {}
         for a in attachments:
             if a.identity_id in graph.nodes and not allowed(a.identity_id):
                 continue
@@ -127,16 +135,23 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                 continue
             key = identity_key(a.identity_id, a.name, 'identity', a.source, a.principal_id)
             workload = graph.nodes[a.workload]
-            uses.setdefault((mapping[a.workload], key, f'{attribution(workload)}: attachment', 'attachment'), set()).add(a.source)
+            wname = attribution(workload)
+            uses.setdefault((mapping[a.workload], key, wname, 'attachment'), (set(), []))[0].add(a.source)
             # Explicit identity selections in service config are evidence of configured use, not traffic.
             props = workload.metadata.get(a.source, {}).get('properties') or {}
             for path, value in _walk_strings(props, 'properties'):
                 if 'identity' in path.lower() and (normalise_id(value) == a.identity_id or
                         (value.casefold() == 'system' and '(system-assigned)' in a.name)):
-                    uses.setdefault((mapping[a.workload], key, f'{attribution(workload)}: configured use at {path}',
-                                     'configured'), set()).add(a.source)
-        for (wkey, key, text, kind), sources in uses.items():
-            link(wkey, key, f'{text} ({", ".join(sorted(sources))})', kind)
+                    sources, paths = uses.setdefault((mapping[a.workload], key, wname, 'configured'), (set(), []))
+                    sources.add(a.source)
+                    if path not in paths:
+                        paths.append(path)
+        for (wkey, key, wname, kind), (sources, paths) in uses.items():
+            what = 'attachment' if kind == 'attachment' else 'configured use'
+            tip = [f'{wname} → {nodes[key].label}: {what}', 'Sources: ' + ', '.join(sorted(sources))]
+            if paths:
+                tip.append('Configured at: ' + ', '.join(sorted(paths)))
+            link(wkey, key, f'{wname}: {what}{_only(sources)}', kind, '\n'.join(tip))
         grant_edges: dict[tuple[str, str], list[tuple]] = {}
         scope_nodes: dict[tuple[str, str], str] = {}
         for grant in evidence.grants:

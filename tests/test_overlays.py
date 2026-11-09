@@ -31,7 +31,8 @@ def test_identity_grants_retain_provenance_scope_condition_and_do_not_claim_usag
     assert 'subscription scope' in labels and 'conditional' in labels and 'condition: x' not in labels
     (grant,) = [e for e in view.edges if e.kind == 'grant']
     assert 'mi-orders' in grant.tooltip and 'Condition: x' in grant.tooltip and 'Roles: Secrets User' in grant.tooltip
-    assert 'azure' in labels and 'bicep' in labels
+    assert 'azure' not in grant.label and 'bicep' not in grant.label  # both sources evidence it: hover only
+    assert 'Sources: azure, bicep' in grant.tooltip
     assert 'configured use' not in labels
     assert 'attachment' in labels
     assert not projection.view.notes
@@ -283,7 +284,7 @@ def test_declared_and_observed_copies_of_an_identity_are_one_node_with_both_prov
     assert node.label == 'mi-orders'
     assert node.sublabel == 'azure, bicep | principal: p-1'
     attachments = [e for e in view.edges if e.kind == 'attachment']
-    assert len(attachments) == 1 and attachments[0].label.endswith('attachment (azure, bicep)')
+    assert len(attachments) == 1 and attachments[0].label.endswith(': attachment') and 'Sources: azure, bicep' in attachments[0].tooltip
 
 
 def test_grants_from_either_source_reach_the_same_identity_by_principal_id():
@@ -296,7 +297,7 @@ def test_grants_from_either_source_reach_the_same_identity_by_principal_id():
     view = application_overlay(graph, grants)
     (node,) = identity_nodes(view)
     (edge,) = [e for e in view.edges if e.kind == 'grant']
-    assert edge.source == node.key and 'mi-orders' in edge.tooltip and 'azure, bicep' in edge.label
+    assert edge.source == node.key and 'mi-orders' in edge.tooltip and 'azure, bicep' in edge.tooltip and 'azure' not in edge.label
 
 
 def test_unresolved_principal_granted_in_both_sources_is_one_node():
@@ -309,9 +310,9 @@ def test_unresolved_principal_granted_in_both_sources_is_one_node():
 
 
 @pytest.mark.parametrize('in_bicep, in_azure, attach_in, sublabel, attachment', [
-    (True, False, ('bicep',), 'bicep | principal: unknown', 'attachment (bicep)'),
-    (False, True, ('azure',), 'azure | principal: p-1', 'attachment (azure)'),
-    (True, True, ('azure',), 'azure, bicep | principal: p-1', 'attachment (azure)'),
+    (True, False, ('bicep',), 'bicep | principal: unknown', 'attachment (bicep only)'),
+    (False, True, ('azure',), 'azure | principal: p-1', 'attachment (azure only)'),
+    (True, True, ('azure',), 'azure, bicep | principal: p-1', 'attachment (azure only)'),
 ])
 def test_identity_drift_between_sources_stays_visible(in_bicep, in_azure, attach_in, sublabel, attachment):
     graph, _mi = declared_and_observed(in_bicep=in_bicep, in_azure=in_azure, attach_in=attach_in)
@@ -346,7 +347,7 @@ def test_single_scope_tooltip_is_that_scope():
     view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', f'/subscriptions/{SUB}')]),
                          mode='identity', rules=Rules())
     (edge,) = grant_edges(view)
-    assert edge.tooltip.splitlines()[1:] == ['Roles: Reader', f'Scope: /subscriptions/{SUB}']
+    assert edge.tooltip.splitlines()[1:] == ['Roles: Reader', 'Sources: azure', f'Scope: /subscriptions/{SUB}']
 
 
 def test_long_condition_unresolved_role_paths_and_extra_roles_move_to_the_tooltip():
@@ -362,3 +363,23 @@ def test_long_condition_unresolved_role_paths_and_extra_roles_move_to_the_toolti
     assert len(edge.label) < 120 and 'guid-1' not in edge.label and SUB not in edge.label
     assert 'Reader, acdd72a7-3385, Role 3 +4 more' in edge.label and 'conditional' in edge.label
     assert 'Role 7' in edge.tooltip and role_path in edge.tooltip and cond in edge.tooltip
+
+
+def test_single_source_grant_keeps_a_short_only_marker_on_the_label():
+    graph = many_resource_graph()
+    p = build_application(graph, Rules(), level='application', subscription_names={})
+    view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', f'/subscriptions/{SUB}', source='bicep')]),
+                         mode='identity', rules=Rules())
+    (edge,) = grant_edges(view)
+    assert edge.label == 'Reader\nbicep only | subscription scope'
+
+
+def test_configured_use_label_drops_the_property_path_which_moves_to_the_tooltip():
+    graph, _mi = declared_and_observed()
+    view = application_overlay(graph, [])
+    app = next(n for n in graph.nodes.values() if n.type.endswith('containerapps'))
+    app.metadata['azure']['properties'] = {'configuration': {'registries': [{'identity': _mi}]}}
+    view = application_overlay(graph, [])
+    (edge,) = [e for e in view.edges if e.kind == 'configured']
+    assert edge.label == 'api: configured use (azure only)' and 'properties' not in edge.label
+    assert 'Configured at: properties.configuration.registries[].identity' in edge.tooltip
