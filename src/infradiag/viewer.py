@@ -38,7 +38,7 @@ __SVG__
   <button id="zin" title="Zoom in (+)">+</button>
   <button id="zout" title="Zoom out (-)">&minus;</button>
   <button id="fit" title="Fit to window (F)">Fit</button>
-  <button id="reset" title="Reset zoom to 100% (0)">1:1</button>
+  <button id="reset" title="Actual size, 100% (0)">1:1</button>
   <span id="zoom"></span>
 </div>
 <div id="hint">Scroll to zoom &middot; drag to pan &middot; double-click to zoom in &middot; keys: + &minus; F 0</div>
@@ -53,27 +53,68 @@ __LIBRARY__
   var svg = document.querySelector('#stage > svg');
   svg.removeAttribute('width');
   svg.removeAttribute('height');
+  // svg-pan-zoom has no pinch of its own, so touch is handled here: one finger pans, two fingers pinch-zoom.
+  var touchHandler = {
+    haltEventListeners: ['touchstart', 'touchend', 'touchmove', 'touchleave', 'touchcancel'],
+    init: function (o) {
+      var inst = o.instance, el = o.svgElement, last = null;
+      function pts(e) {
+        var r = el.getBoundingClientRect(), out = [];
+        for (var i = 0; i < e.touches.length; i++) out.push({ x: e.touches[i].clientX - r.left, y: e.touches[i].clientY - r.top });
+        return out;
+      }
+      function dist(a) { return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); }
+      function mid(a) { return { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2 }; }
+      function start(e) { e.preventDefault(); last = pts(e); }
+      function move(e) {
+        e.preventDefault();
+        var now = pts(e);
+        if (last && now.length === 1 && last.length === 1) {
+          inst.panBy({ x: now[0].x - last[0].x, y: now[0].y - last[0].y });
+        } else if (last && now.length >= 2 && last.length >= 2 && dist(last) > 0) {
+          var m = mid(now), lm = mid(last);
+          inst.panBy({ x: m.x - lm.x, y: m.y - lm.y });
+          inst.zoomAtPointBy(dist(now) / dist(last), m);
+        }
+        last = now;
+      }
+      function end(e) { last = e.touches.length ? pts(e) : null; }
+      el.addEventListener('touchstart', start, { passive: false });
+      el.addEventListener('touchmove', move, { passive: false });
+      el.addEventListener('touchend', end);
+      el.addEventListener('touchcancel', end);
+      this.destroy = function () {
+        el.removeEventListener('touchstart', start);
+        el.removeEventListener('touchmove', move);
+        el.removeEventListener('touchend', end);
+        el.removeEventListener('touchcancel', end);
+      };
+    },
+    destroy: function () {}
+  };
   var pz = svgPanZoom(svg, {
     zoomEnabled: true, panEnabled: true, controlIconsEnabled: false, dblClickZoomEnabled: true,
     mouseWheelZoomEnabled: true, preventMouseEventsDefault: true,
-    fit: true, center: true,
+    fit: true, center: true, customEventsHandler: touchHandler,
     minZoom: 0.01, maxZoom: 100000, zoomScaleSensitivity: 0.3
   });
   var label = document.getElementById('zoom');
-  var initial = pz.getZoom();
-  function show() { label.textContent = Math.round(pz.getZoom() / initial * 100) + '%'; }
+  // Real scale: screen pixels per SVG user unit (getZoom() alone is relative to the fitted size; getSizes().realZoom already includes it).
+  function scale() { return pz.getSizes().realZoom; }  // already includes the current zoom
+  function show() { label.textContent = Math.round(scale() * 100) + '%'; }
+  function actualSize() { pz.zoom(pz.getZoom() / pz.getSizes().realZoom); pz.center(); show(); }
   function fit() { pz.resize(); pz.fit(); pz.center(); show(); }
   pz.setOnZoom(show);
   document.getElementById('zin').onclick = function () { pz.zoomIn(); };
   document.getElementById('zout').onclick = function () { pz.zoomOut(); };
   document.getElementById('fit').onclick = fit;
-  document.getElementById('reset').onclick = function () { pz.resetZoom(); pz.center(); show(); };
+  document.getElementById('reset').onclick = actualSize;
   window.addEventListener('resize', function () { pz.resize(); });
   window.addEventListener('keydown', function (e) {
     if (e.key === '+' || e.key === '=') pz.zoomIn();
     else if (e.key === '-') pz.zoomOut();
     else if (e.key === 'f' || e.key === 'F') fit();
-    else if (e.key === '0') { pz.resetZoom(); pz.center(); show(); }
+    else if (e.key === '0') actualSize();
   });
   show();
 })();

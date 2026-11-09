@@ -29,7 +29,7 @@ def test_viewer_inlines_the_vendored_library_and_keeps_its_licence():
 
 def test_viewer_is_self_contained(tmp_path):
     text = viewer.viewer_html(SVG, "t")
-    assert not re.search(r"<script[^>]+src=|<link[^>]+href=|<img[^>]+src=|@import|url\(\s*['\"]?https?:", text, re.I)
+    assert not re.search(r"<script[^>]+src=|<link[^>]+href=|<img[^>]+src=|@import|url\(\s*['\"]?https?:", text, re.IGNORECASE)
     # Every URL left in the page is a W3C XML namespace identifier or the library's own credit line.
     urls = {u for u in re.findall(r"https?://[^\s\"'<>)]+", text) if not u.startswith("http://www.w3.org/")}
     assert urls == {"https://github.com/bumbu/svg-pan-zoom"}, urls
@@ -54,3 +54,15 @@ def test_render_writes_a_viewer_per_svg_and_prints_both_paths(tmp_path, monkeypa
     assert len(svgs) == 2
     for line in lines:
         assert Path(line).exists()
+
+
+def test_viewer_handles_touch_pinch_itself_rather_than_relying_on_the_library():
+    text = viewer.viewer_html(SVG, "t")
+    assert "customEventsHandler: touchHandler" in text
+    assert "zoomAtPointBy(" in text and "touchmove" in text
+
+
+def test_one_to_one_sets_an_absolute_scale_not_the_fitted_one():
+    text = viewer.viewer_html(SVG, "t")
+    assert "resetZoom" not in text.split("svgPanZoom(svg, {", 1)[1]  # the library itself defines it; the page must not call it
+    assert "pz.zoom(pz.getZoom() / pz.getSizes().realZoom)" in text

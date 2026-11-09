@@ -76,8 +76,8 @@ out/Contoso-Dev/applications/application-c4-identity.svg
 out/Contoso-Dev/applications/application-c4-identity.html
 ```
 
-The viewer fills the browser window. Scroll or pinch to zoom without a limit (the SVG stays vector-sharp), drag to pan,
-double-click to zoom in, and use the **+**, **−**, **Fit** and **1:1** buttons (or the keys `+`, `-`, `F`, `0`).
+The viewer fills the browser window. Scroll (or pinch on a touch screen) to zoom without a limit (the SVG stays vector-sharp), drag to pan,
+double-click to zoom in, and use the **+**, **−**, **Fit** and **1:1** (actual size, 100%) buttons (or the keys `+`, `-`, `F`, `0`).
 It is a single self-contained file: the SVG and a vendored copy of
 [svg-pan-zoom](https://github.com/bumbu/svg-pan-zoom) (BSD-2-Clause, version and source in
 `src/infradiag/vendor/README.md`) are inlined, so it needs no network and no server. Open it with a double-click in
