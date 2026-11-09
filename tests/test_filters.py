@@ -195,7 +195,7 @@ def test_identity_with_only_an_attachment_is_pruned_once_a_filter_removes_its_gr
 
 
 def test_overlay_without_a_filter_still_draws_attachment_only_identities():
-    graph, mi, _api, _vault = __import__('tests.test_overlays', fromlist=['fixture']).fixture()
+    graph, _mi, _api, _vault = __import__('tests.test_overlays', fromlist=['fixture']).fixture()
     p = build_application(graph, Rules(), level='application', subscription_names={})
     view = apply_overlay(p, graph, SecurityEvidence(), mode='identity', rules=Rules())
     assert any(n.kind == 'identity' for n in view.nodes) and any(e.kind == 'attachment' for e in view.edges)
