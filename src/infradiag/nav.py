@@ -26,6 +26,7 @@ NAV_FILE = "nav.js"
 LANDING = "index.html"
 LANDING_MARK = "data-infradiag-landing"
 HOME_MARK = "data-infradiag-home"
+FRAME_MARK = "data-infradiag-frame"
 KIND_ORDER = {"index": 0, "diagram": 1, "table": 2, "other": 3}
 
 _TITLE = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -132,13 +133,18 @@ def _home_tag(page_path: Path, root: Path) -> str:
     return (f'<a {HOME_MARK} href="{html.escape(target)}" target="_top" title="Browse all diagrams and tables" '
             'style="position:fixed;right:10px;bottom:8px;z-index:20;font:12px system-ui,sans-serif;padding:3px 8px;'
             'border:1px solid #888;border-radius:12px;background:rgba(255,255,255,.92);color:#1565c0;text-decoration:none">'
-            '&#9776; all diagrams</a>')
+            '&#9776; all diagrams</a>'
+            # Inside the master page's iframe, tell it which page this is: after following a link within the frame the
+            # master keeps its hash and highlight in step. postMessage works across file:// origins, which are opaque
+            # in Chrome and Edge, so the master cannot read the frame's location itself.
+            f'<script {FRAME_MARK}>if(window.parent!==window)try{{parent.postMessage({{infradiag:"nav",path:{json.dumps(rel)}}},"*")}}'
+            'catch(e){}</script>')
 
 
 def _ensure_home_link(path: Path, root: Path) -> bool:
     text = path.read_text(encoding="utf-8", errors="replace")
     tag = _home_tag(path, root)
-    existing = re.search(rf"<a {HOME_MARK} .*?</a>", text, re.DOTALL)
+    existing = re.search(rf"<a {HOME_MARK} .*?</a>(<script {FRAME_MARK}>.*?</script>)?", text, re.DOTALL)
     if existing:
         if existing.group(0) == tag:
             return False
@@ -243,17 +249,36 @@ body.collapsed #toggle{left:8px}
     });
     none.hidden = any;
   });
+  var current = '';
+  function mark(path) {
+    Object.keys(links).forEach(function (p) { links[p].removeAttribute('aria-current'); });
+    links[path].setAttribute('aria-current', 'page');
+    links[path].scrollIntoView({ block: 'nearest' });
+    document.title = links[path].title + ' - infradiag';
+  }
+  // A page in the frame announces itself after loading, so following a link inside the frame (index -> viewer) updates
+  // the hash and highlight. Reading the frame's location instead would fail on file:// (opaque origins).
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (e.source !== frame.contentWindow || !d || d.infradiag !== 'nav' || !links.hasOwnProperty(d.path)) return;
+    if (d.path === current) return;
+    current = d.path;
+    mark(d.path);
+    location.hash = '#' + enc(d.path);
+  });
   function select() {
     var path = '';
     try { path = decodeURIComponent(location.hash.slice(1)); } catch (e) {}
-    Object.keys(links).forEach(function (p) { links[p].removeAttribute('aria-current'); });
-    if (!links.hasOwnProperty(path)) { frame.hidden = true; welcome.hidden = false; document.title = 'infradiag: all diagrams and tables'; return; }
-    links[path].setAttribute('aria-current', 'page');
-    links[path].scrollIntoView({ block: 'nearest' });
+    if (!links.hasOwnProperty(path)) {
+      Object.keys(links).forEach(function (p) { links[p].removeAttribute('aria-current'); });
+      current = ''; frame.hidden = true; welcome.hidden = false; document.title = 'infradiag: all diagrams and tables'; return;
+    }
+    mark(path);
+    if (path === current) return;  // already showing it (the frame navigated itself and told us)
+    current = path;
     // replace() so that moving between items adds one history entry (the hash), not two.
     frame.contentWindow.location.replace(enc(path));
     frame.hidden = false; welcome.hidden = true;
-    document.title = links[path].title + ' - infradiag';
   }
   window.addEventListener('hashchange', select);
   toggle.addEventListener('click', function () {

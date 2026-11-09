@@ -5,6 +5,7 @@ from pathlib import Path
 from infradiag import cli, nav
 from infradiag.access import IndexEntry, render_html, render_index
 from infradiag.viewer import viewer_html
+from tests.factories import fake_svg
 from tests.test_cli import SUB, capture_d2, setup
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>x</text></svg>'
@@ -156,3 +157,31 @@ def test_render_builds_nav_across_separate_runs(tmp_path, monkeypatch, capsys):
     # An earlier run's pages survive in the nav until their files go.
     assert cli.main(args + ["render", "--view", "summary", "--subscription", SUB]) == 0
     assert "applications/application-index.html" in (out / "nav.js").read_text()
+
+
+def test_nav_is_refreshed_even_when_a_later_view_fails(tmp_path, monkeypatch):
+    calls = []
+
+    def flaky(text, d2, svg, **kw):
+        calls.append(svg)
+        if len(calls) == 2:
+            raise RuntimeError("d2 timed out")
+        fake_svg(svg)
+
+    monkeypatch.setattr(cli, "render_svg", flaky)
+    assert cli.main(setup(tmp_path) + ["render", "--view", "all"]) == 2
+    assert "detailed.html" in (tmp_path / "out/nav.js").read_text()
+    assert (tmp_path / "out/index.html").exists()
+
+
+def test_pages_tell_the_master_page_where_they_are_so_frame_navigation_keeps_the_hash_in_step(tmp_path):
+    tree(tmp_path)
+    nav.refresh_nav(tmp_path)
+    text = (tmp_path / "applications/application-identity-prod.html").read_text()
+    assert 'parent.postMessage({infradiag:"nav",path:"applications/application-identity-prod.html"},"*")' in text
+    master = (tmp_path / "index.html").read_text()
+    assert "addEventListener('message'" in master and "e.source !== frame.contentWindow" in master
+    assert "contentWindow.location.href" not in master  # unreadable on file://
+    before = text
+    nav.refresh_nav(tmp_path)
+    assert (tmp_path / "applications/application-identity-prod.html").read_text() == before

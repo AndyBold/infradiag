@@ -459,25 +459,27 @@ def main(argv: list[str] | None = None) -> int:
             book = PriceBook(cfg.cache_dir, cfg.cost.currency, refresh=args.refresh)
         rc = 0
         progress = Progress()
-        for n, target in enumerate(chosen, 1):
-            if len(chosen) > 1 and args.command in ("extract", "render"):
-                progress.line(f"subscription {n}/{len(chosen)}: {target.label}")
-            try:
-                if args.command == "extract":
-                    rc = max(rc, _extract(target, args, progress))
-                elif args.command == "diff":
-                    rc = max(rc, _diff(target, rules))
-                elif args.command == "cost":
-                    rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
-                else:
-                    rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
-                                         args.style, args.security_overlay, progress, args.d2_timeout, grant_filter))
-            except (CacheMissing, AzError, PriceError) as exc:
-                # One subscription's missing cache or az failure shouldn't stop the others.
-                print(f"error: {target.label}: {exc}", file=sys.stderr)
-                rc = 2
-        if args.command == "render":
-            _refresh_nav(cfg)
+        try:
+            for n, target in enumerate(chosen, 1):
+                if len(chosen) > 1 and args.command in ("extract", "render"):
+                    progress.line(f"subscription {n}/{len(chosen)}: {target.label}")
+                try:
+                    if args.command == "extract":
+                        rc = max(rc, _extract(target, args, progress))
+                    elif args.command == "diff":
+                        rc = max(rc, _diff(target, rules))
+                    elif args.command == "cost":
+                        rc = max(rc, _cost(target, cfg.cost, book, period, args.refresh, args.detail))
+                    else:
+                        rc = max(rc, _render(target, rules, args.view, views_path, icon_dir, sub_names,
+                                             args.style, args.security_overlay, progress, args.d2_timeout, grant_filter))
+                except (CacheMissing, AzError, PriceError) as exc:
+                    # One subscription's missing cache or az failure shouldn't stop the others.
+                    print(f"error: {target.label}: {exc}", file=sys.stderr)
+                    rc = 2
+        finally:
+            if args.command == "render":
+                _refresh_nav(cfg)
         return rc
     except (ConfigError, SubscriptionError, CacheMissing, AzError, D2NotFound, RuntimeError,
             FileNotFoundError) as exc:
