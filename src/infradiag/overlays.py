@@ -8,7 +8,7 @@ from copy import deepcopy
 from .edges import _walk_strings, get_path
 from .ids import find_ids, normalise_id
 from .model import Graph
-from .normalise import INLINE_CHILDREN
+from .normalise import INLINE_CHILDREN, UNEVALUATED
 from .rules import Rules, matches
 from .security import SecurityEvidence, identity_attachments, scope_contains
 from .subscriptions import subscription_label
@@ -17,6 +17,7 @@ from .views import View, ViewEdge, ViewNode, ViewProjection
 SUBSCRIPTION_SCOPE = re.compile(r'^/subscriptions/([^/]+)$')
 RESOURCE_GROUP_SCOPE = re.compile(r'^/subscriptions/[^/]+/resourcegroups/[^/]+$')
 MAX_ROLES = 3
+USER_ASSIGNED = 'microsoft.managedidentity/userassignedidentities'
 
 
 def _listed(values, limit: int) -> str:
@@ -78,30 +79,53 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
         return key
     if mode in ('identity', 'all'):
         attachments = list(dict.fromkeys(identity_attachments(graph) + evidence.attachments))
-        identities = {}
-        excluded_principals = set()
+        # One node per identity, whichever source evidences it. Bicep (declared) and Azure (observed) copies of an
+        # identity are the same ARM resource; what-if usually lacks the principal ID that Resource Graph returns, so
+        # grants are matched to identities through principal IDs from either source. Provenance is kept on the node's
+        # sublabel and on every edge, so an identity or attachment present in only one source still shows as drift.
+        principals: dict[str, str] = {}
         for a in attachments:
-            identity = graph.nodes.get(a.identity_id)
-            if identity and not allowed(a.identity_id):
-                excluded_principals.add((a.source, a.principal_id))
+            if a.principal_id:
+                principals.setdefault(a.principal_id, a.identity_id)
+        for rid, n in sorted(graph.nodes.items()):
+            if n.type == USER_ASSIGNED:
+                for _source, meta in sorted(n.metadata.items()):
+                    if pid := str((meta.get('properties') or {}).get('principalId') or '').lower():
+                        principals.setdefault(pid, rid)
+        identities: dict[str, str] = {}
+        provenance: dict[str, tuple[str, set, set]] = {}
+
+        def identity_key(identity_id, label, kind, source, principal=''):
+            key = identities.setdefault(identity_id, f'si{len(identities)}')
+            extra(key, label, '', kind)
+            _id, sources, pids = provenance.setdefault(key, (identity_id, set(), set()))
+            sources.add(source)
+            if principal:
+                pids.add(principal)
+            return key
+        uses: dict[tuple[str, str, str, str], set[str]] = {}
+        for a in attachments:
+            if a.identity_id in graph.nodes and not allowed(a.identity_id):
                 continue
             if a.workload not in mapping:
                 continue
-            ikey = (a.source, a.principal_id or a.identity_id)
-            key = identities.setdefault(ikey, f'si{len(identities)}')
-            extra(key, a.name, f'{a.source} | principal: {a.principal_id or "unknown"}', 'identity')
+            key = identity_key(a.identity_id, a.name, 'identity', a.source, a.principal_id)
             workload = graph.nodes[a.workload]
-            link(mapping[a.workload], key, f'{attribution(workload)}: attachment ({a.source})', 'attachment')
+            uses.setdefault((mapping[a.workload], key, f'{attribution(workload)}: attachment', 'attachment'), set()).add(a.source)
             # Explicit identity selections in service config are evidence of configured use, not traffic.
             props = workload.metadata.get(a.source, {}).get('properties') or {}
             for path, value in _walk_strings(props, 'properties'):
                 if 'identity' in path.lower() and (normalise_id(value) == a.identity_id or
                         (value.casefold() == 'system' and '(system-assigned)' in a.name)):
-                    link(mapping[a.workload], key, f'{attribution(workload)}: configured use at {path} ({a.source})', 'configured')
+                    uses.setdefault((mapping[a.workload], key, f'{attribution(workload)}: configured use at {path}',
+                                     'configured'), set()).add(a.source)
+        for (wkey, key, text, kind), sources in uses.items():
+            link(wkey, key, f'{text} ({", ".join(sorted(sources))})', kind)
         grant_edges: dict[tuple[str, str], list[tuple]] = {}
         scope_nodes: dict[tuple[str, str], str] = {}
         for grant in evidence.grants:
-            if (grant.source, grant.principal_id) in excluded_principals:
+            identity_id = principals.get(grant.principal_id)
+            if identity_id in graph.nodes and not allowed(identity_id):
                 continue
             scope = normalise_id(grant.scope)
             in_sub = SUBSCRIPTION_SCOPE.match(scope)
@@ -128,22 +152,22 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                 # distinct from grants made to its principal. Not for grants drawn to a scope node: the identity
                 # resource would have no edge.
                 for rid, n in sorted(graph.nodes.items()):
-                    if (n.type == 'microsoft.managedidentity/userassignedidentities' and allowed(rid)
+                    if (n.type == USER_ASSIGNED and allowed(rid)
                             and scope_contains(grant.scope, rid) and rid not in mapping):
                         mapping[rid] = extra(f'sr{len(nodes)}', n.name, 'Managed identity resource', 'identity_resource')
                 targets = find_targets()
             if not targets:
                 continue
-            ikey = (grant.source, grant.principal_id)
-            key = identities.setdefault(ikey, f'si{len(identities)}')
-            if key not in nodes:
-                # Resolve an unattached identity by principal ID when visible, otherwise retain ID.
-                identity = next((n for n in graph.nodes.values() if n.type == 'microsoft.managedidentity/userassignedidentities'
-                                 and str((n.metadata.get(grant.source, {}).get('properties') or {}).get('principalId', '')).lower()
-                                 == grant.principal_id), None)
-                if identity and not allowed(identity.id):
-                    continue
-                extra(key, identity.name if identity else f'Unresolved principal {grant.principal_id}', grant.source, 'identity' if identity else 'principal')
+            if identity_id:
+                identity = graph.nodes.get(identity_id)
+                name = identity.name if identity else identity_id.rsplit('/', 1)[-1]
+                if identity and identity.type != USER_ASSIGNED:
+                    name += ' (system-assigned)'
+                key = identity_key(identity_id, name, 'identity', grant.source, grant.principal_id)
+            else:
+                # Not a visible identity: retain the principal ID rather than asserting what kind of principal it is.
+                key = identity_key(f'principal:{grant.principal_id}', f'Unresolved principal {grant.principal_id}',
+                                   'principal', grant.source)
             # An assignment above the resources (subscription, management group) is drawn once, to a boundary
             # node for the subscription, rather than once per resource it covers. A resource-group assignment
             # gets the same treatment when it covers several visible elements. Resource scope stays on the resource.
@@ -166,6 +190,18 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                     grant_edges.setdefault((key, mapping[rid]), []).append((grant, tag, attribution(graph.nodes[rid])))
         for (pkey, tkey), items in grant_edges.items():
             link(pkey, tkey, grant_label(nodes[pkey].label, items), 'grant')
+        for key, (identity_id, sources, pids) in provenance.items():
+            # Where the identity resource exists, plus where it is attached or granted: Bicep may only reference an
+            # identity it does not declare.
+            resource = graph.nodes.get(identity_id)
+            if resource and resource.type == USER_ASSIGNED:
+                sources = sources | resource.sources
+            nodes[key].sublabel = ', '.join(sorted(sources))
+            if nodes[key].kind == 'identity':
+                pids = pids | {pid for pid, iid in principals.items() if iid == identity_id}
+                # what-if leaves a principal ID it cannot know yet as an expression; a real one supersedes it
+                known = sorted(p for p in pids if not UNEVALUATED.match(p)) or sorted(pids)
+                nodes[key].sublabel += f' | principal: {", ".join(known) or "unknown"}'
         view.notes.extend(c for c in evidence.coverage if c not in view.notes)
         view.notes.append('Identity overlay: attachment / configured use / RBAC grant; not effective access or observed traffic. '
                           'Bicep is declared; Azure is observed. Grants do not imply exclusive access.')

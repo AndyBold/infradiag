@@ -209,6 +209,9 @@ style and every view. Purple relationships distinguish **identity attachment**, 
 conditions and Azure/Bicep provenance. Aggregated views retain workload names in security
 relationships or annotations when the endpoints collapse into the same visible element.
 An endpoint reference by itself does not establish which identity authenticates a call.
+Each identity is drawn once: the Bicep and Azure copies of a managed identity are matched by resource ID, and grants
+from either source by principal ID (what-if rarely knows it; Resource Graph does). The node and each edge list the
+sources that evidence them, so an identity or attachment found in only one source still shows as drift.
 
 To keep large views drawable, a role assignment is drawn once at the scope it was made, not
 once per resource it covers. A subscription (or management group) assignment is one edge to a
