@@ -116,3 +116,35 @@ def test_nav_keeps_a_folders_subfolders_directly_after_it():
     names = [(g["name"], g.get("depth"), g.get("label")) for g in nav.build_tree(pages)]
     assert names == [("a", None, None), ("a/applications", 1, "applications"), ("a-b", None, None),
                      ("z/applications", None, None)]
+
+
+def corrupt(tmp_path, name):
+    (tmp_path / "cache" / SUB / name).write_text('{"rows": [')
+
+
+def test_a_corrupt_cache_file_fails_its_steps_cleanly_and_names_the_file(tmp_path, monkeypatch, capsys):
+    capture_d2(monkeypatch)
+    args = setup(tmp_path)
+    corrupt(tmp_path, "arg.json")
+    assert run(args, ["--subscription", SUB]) == 2
+    text = capsys.readouterr()
+    assert f"build full: 0/{len(FULL)} steps succeeded" in text.out
+    assert "Traceback" not in text.err and "arg.json is not valid JSON" in text.err and "infradiag extract" in text.err
+
+
+def test_a_corrupt_whatif_cache_fails_only_the_steps_that_need_it(tmp_path, monkeypatch, capsys):
+    capture_d2(monkeypatch)
+    args = setup(tmp_path)
+    (tmp_path / "cache" / SUB / "whatif" / "main-dev.json").write_text("not json")
+    assert run(args, ["--subscription", SUB]) == 2
+    assert "main-dev.json is not valid JSON" in capsys.readouterr().err
+
+
+def test_plain_render_reports_a_corrupt_cache_file_cleanly(tmp_path, monkeypatch, capsys):
+    capture_d2(monkeypatch)
+    args = setup(tmp_path)
+    corrupt(tmp_path, "arg.json")
+    assert cli.main(args + ["render", "--subscription", SUB]) == 2
+    assert "arg.json is not valid JSON" in capsys.readouterr().err
+    assert cli.main(args + ["render", "--view", "application", "--subscription", SUB]) == 2
+    assert "Traceback" not in capsys.readouterr().err
