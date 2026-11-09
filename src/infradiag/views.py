@@ -25,6 +25,10 @@ class ViewNode:
     resource_ids: tuple[str, ...] = ()
     kind: str = "resource"
     annotations: tuple[str, ...] = ()
+    # Application model: the environment a top-level application container belongs to ("" for anything else).
+    environment: str = ""
+    # Overlay scope nodes (subscription / resource group): keys of the view elements the grants beneath them cover.
+    covers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, order=True)

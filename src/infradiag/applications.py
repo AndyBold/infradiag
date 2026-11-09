@@ -8,6 +8,8 @@ from .model import STUB, Graph, Node
 from .rules import Rules
 from .views import View, ViewEdge, ViewNode, ViewProjection, filter_graph, short_type
 
+EXTERNAL = 'External dependencies'
+
 
 def tags_for(node: Node) -> dict[str, str]:
     return {k.casefold(): str(v).strip() for k, v in node.tags.items()}
@@ -36,7 +38,7 @@ def build_application(graph: Graph, rules: Rules, *, level: str,
         app = override.get('application') or tags.get(config.get('application_tag', 'application').casefold()) or 'Unclassified infrastructure'
         env = override.get('environment') or tags.get(config.get('environment_tag', 'environment').casefold()) or 'unspecified'
         if STUB in n.flags:
-            app = 'External dependencies'
+            app = EXTERNAL
         # Explicit group permits merging subscriptions; environments always remain distinct.
         scope = 'group:' + override['group'] if override.get('group') else n.subscription
         key = (scope.casefold(), env.casefold(), app.casefold())
@@ -50,7 +52,8 @@ def build_application(graph: Graph, rules: Rules, *, level: str,
         shared = any(settings[n.id][2].get('shared') for n in members)
         boundary = ViewNode(f'a{i}', app, f'{env} | {scope_label}' + (' | shared service' if shared else '') +
                             ''.join('\n' + x for x in annotations), kind='system' if level == 'context' else 'application',
-                            resource_ids=tuple(n.id for n in members) if level == 'context' else ())
+                            resource_ids=tuple(n.id for n in members) if level == 'context' else (),
+                            environment='' if app == EXTERNAL else env)
         roots.append(boundary)
         components = defaultdict(list)
         for n in members:

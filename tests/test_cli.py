@@ -383,3 +383,41 @@ def test_d2_timeout_rejects_non_positive_or_non_integer(tmp_path, capsys, value)
     with pytest.raises(SystemExit) as exc:
         cli.main(setup(tmp_path) + ["render", "--d2-timeout", value])
     assert exc.value.code == 2 and "--d2-timeout" in capsys.readouterr().err
+
+
+def test_split_environment_writes_a_diagram_and_table_per_environment_and_an_index(tmp_path, monkeypatch):
+    args = setup(tmp_path)
+    capture_d2(monkeypatch)
+    sec = tmp_path / 'cache' / SUB / 'security.json'
+    sec.write_text(json.dumps({'version': 1, 'subscription': SUB, 'coverage': [], 'grants': [
+        {'principal_id': 'p', 'role_id': 'r', 'role_name': 'Reader', 'scope': f'/subscriptions/{SUB}',
+         'condition': '', 'source': 'azure', 'subscription': SUB}]}))
+    assert cli.main(args + ['render', '--view', 'application', '--security-overlay', 'identity', '--split', 'environment',
+                            '--subscription', SUB]) == 0
+    out = tmp_path / 'out/applications'
+    names = sorted(p.name for p in out.iterdir())
+    assert 'application-identity.d2' not in names  # the whole view is not laid out when split
+    assert 'application-identity-access.html' in names and 'application-identity-access.csv' in names
+    assert 'application-identity-unspecified.d2' in names and 'application-identity-unspecified-access.html' in names
+    index = (out / 'application-identity-index.html').read_text()
+    assert 'application-identity-unspecified.svg' in index and 'application-identity-access.html' in index
+    assert 'https://' not in index
+
+
+def test_split_without_an_identity_overlay_writes_no_tables(tmp_path, monkeypatch):
+    capture_d2(monkeypatch)
+    assert cli.main(setup(tmp_path) + ['render', '--view', 'application', '--split', 'environment']) == 0
+    names = [p.name for p in (tmp_path / 'out/applications').iterdir()]
+    assert 'application-index.html' in names and not any('access' in n for n in names)
+
+
+def test_split_needs_an_application_view(tmp_path, capsys):
+    assert cli.main(setup(tmp_path) + ['render', '--view', 'summary', '--split', 'environment']) == 2
+    assert '--split environment needs --view application' in capsys.readouterr().err
+
+
+def test_identity_overlay_writes_the_access_table_for_non_application_views_too(tmp_path, monkeypatch):
+    capture_d2(monkeypatch)
+    assert cli.main(setup(tmp_path) + ['render', '--view', 'summary', '--security-overlay', 'identity']) == 0
+    assert (tmp_path / DEV_OUT / 'summary-identity-access.html').exists()
+    assert (tmp_path / DEV_OUT / 'summary-identity-access.csv').exists()
