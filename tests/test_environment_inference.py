@@ -110,7 +110,7 @@ def test_untagged_report_lists_inferred_and_unspecified_with_the_rule_and_a_sugg
                      ('rg-app-dev0-scus', 'Microsoft.KeyVault/vaults/kv-inferred', {}),
                      ('rg-misc', 'Microsoft.Network/networkWatchers/nw', {}),
                      ('rg-misc', 'Microsoft.KeyVault/vaults/kv-forced', {}))
-    d, p = decisions_for(graph, overrides=[{'match': {'name': 'kv-forced'}, 'environment': 'qa'}])
+    _d, p = decisions_for(graph, overrides=[{'match': {'name': 'kv-forced'}, 'environment': 'qa'}])
     path = tmp_path / 'x-untagged.csv'
     report = write_untagged(p.env_decisions, graph, path)
     rows = list(csv.reader(io.StringIO(path.read_text())))
