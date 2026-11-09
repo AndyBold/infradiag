@@ -94,6 +94,7 @@ def test_no_role_lookup_when_everything_resolves(tmp_path):
             return [{'roleDefinitionName': 'Reader', 'properties': {
                 'principalId': 'p', 'scope': f'/subscriptions/{SUB}', 'roleDefinitionId': TENANT_BUILTIN}}]
         return {'data': [
+            {'type': 'microsoft.authorization/roledefinitions', 'id': TENANT_BUILTIN, 'properties': {'roleName': 'Reader'}},
             {'type': 'microsoft.authorization/roledefinitions', 'id': TENANT_BUILTIN.replace('b24988ac', '22222222')
              .replace('6180-42a0-ab88-20f7382dd24c', '2222-2222-2222-222222222222'),
              'properties': {'roleName': 'Custom'}},
@@ -104,3 +105,27 @@ def test_no_role_lookup_when_everything_resolves(tmp_path):
     evidence = extract_security(cfg, run)
     assert {g.role_name for g in evidence.grants} == {'Reader', 'Custom'}
     assert not any(a[:3] == ['role', 'definition', 'list'] for a in calls)
+
+
+def test_role_plane_is_cached_from_builtin_and_custom_role_permissions(tmp_path):
+    cfg = SimpleNamespace(cache_dir=tmp_path, subscription=SUB)
+    def lookup(args):
+        return [{'roleName': 'Key Vault Secrets User', 'name': BUILTIN, 'id': f'/subscriptions/{SUB}/providers/'
+                 f'Microsoft.Authorization/roleDefinitions/{BUILTIN}',
+                 'permissions': [{'actions': [], 'dataActions': ['Microsoft.KeyVault/vaults/secrets/getSecret/action']}]}]
+    extract_security(cfg, _builtin_run(lookup, []))
+    assert load_security(cfg).grants[0].role_kind == 'data'
+
+
+def test_inherited_assignment_with_inline_role_name_still_gets_its_definition_and_plane(tmp_path):
+    cfg = SimpleNamespace(cache_dir=tmp_path, subscription=SUB)
+    def run(args):
+        if args[:3] == ['role', 'assignment', 'list']:
+            return [{'principalId': 'p', 'scope': '/providers/Microsoft.Management/managementGroups/root',
+                     'roleDefinitionId': TENANT_BUILTIN, 'roleDefinitionName': 'Key Vault Secrets User'}]
+        if args[:3] == ['role', 'definition', 'list']:
+            return [{'roleName': 'Key Vault Secrets User', 'id': TENANT_BUILTIN,
+                     'permissions': [{'actions': [], 'dataActions': ['x']}]}]
+        return {'data': []}
+    (grant,) = extract_security(cfg, run).grants
+    assert grant.role_name == 'Key Vault Secrets User' and grant.role_kind == 'data'

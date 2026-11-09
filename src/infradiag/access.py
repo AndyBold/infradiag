@@ -15,7 +15,7 @@ from pathlib import Path
 from .ids import normalise_id
 from .model import STUB, Graph
 from .rules import Rules, matches
-from .security import SecurityEvidence, identity_attachments, scope_contains
+from .security import SecurityEvidence, resolve_principals, scope_contains
 from .split import key_env
 from .subscriptions import subscription_label
 from .views import ViewProjection
@@ -23,7 +23,6 @@ from .views import ViewProjection
 MG_PREFIX = '/providers/microsoft.management/managementgroups/'
 SUBSCRIPTION = re.compile(r'^/subscriptions/([^/]+)$')
 RESOURCE_GROUP = re.compile(r'^/subscriptions/[^/]+/resourcegroups/([^/]+)$')
-UAI = 'microsoft.managedidentity/userassignedidentities'
 PRINCIPAL_TYPES = {'user': 'user', 'group': 'group', 'serviceprincipal': 'service principal',
                    'foreigngroup': 'group', 'device': 'device'}
 
@@ -82,16 +81,7 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
         n = graph.nodes[rid]
         return (STUB not in n.flags and not matches(n.name, rules.out_of_scope_names) and not (rules.hide_managed and n.managed_by)
                 and not n.type.startswith('microsoft.authorization/') and rid in projection.resources)
-    principals: dict[str, tuple[str, str]] = {}
-    for a in list(identity_attachments(graph)) + evidence.attachments:
-        if a.principal_id:
-            kind = 'managed identity (system-assigned)' if a.name.endswith('(system-assigned)') else 'managed identity (user-assigned)'
-            principals.setdefault(a.principal_id, (a.name, kind))
-    for n in graph.nodes.values():
-        if n.type == UAI:
-            for meta in n.metadata.values():
-                if pid := str((meta.get('properties') or {}).get('principalId') or '').lower():
-                    principals.setdefault(pid, (n.name, 'managed identity (user-assigned)'))
+    principals = resolve_principals(graph, evidence)
     counts = Counter(n.name.casefold() for n in graph.nodes.values())
 
     rows: list[AccessRow] = []
@@ -204,7 +194,7 @@ SCRIPT = """
 """
 
 
-def render_html(rows: list[AccessRow], title: str, csv_name: str, back: str = '') -> str:
+def render_html(rows: list[AccessRow], title: str, csv_name: str, back: str = '', filter_note: str = '') -> str:
     esc = html.escape
     head = ''.join(f'<th>{esc(label)}</th>' for _, label in COLUMNS)
     filt = ''.join(f'<th><input class="colfilter" data-col="{i}" aria-label="Filter {esc(label)}" placeholder="filter"></th>'
@@ -212,11 +202,12 @@ def render_html(rows: list[AccessRow], title: str, csv_name: str, back: str = ''
     body = '\n'.join('<tr>' + ''.join(f'<td class="{"num" if c == "covers" else ""}">{esc(str(getattr(r, c)))}</td>'
                                        for c, _ in COLUMNS) + '</tr>' for r in rows)
     links = f'<a href="{esc(csv_name)}">CSV</a>' + (f' · <a href="{esc(back)}">index</a>' if back else '')
+    filtered = f'<p class="note filters-active">{esc(filter_note)}</p>\n' if filter_note else ''
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title><style>{STYLE}</style></head>
 <body><h1>{esc(title)}</h1>
-<p class="note">RBAC role assignments (Bicep declared and Azure observed): not effective access, group membership or observed
+{filtered}<p class="note">RBAC role assignments (Bicep declared and Azure observed): not effective access, group membership or observed
 traffic. One row per assignment and environment. Subscription, management group and resource group scopes cover many
 resources; <em>Elements covered</em> counts those drawn in the environment. {links}</p>
 <input id="q" type="search" placeholder="Filter all columns" aria-label="Filter all columns"><span id="count" aria-live="polite"></span>
@@ -228,11 +219,12 @@ resources; <em>Elements covered</em> counts those drawn in the environment. {lin
 """
 
 
-def write_access(rows: list[AccessRow], stem_path: Path, title: str, back: str = '') -> tuple[Path, Path]:
+def write_access(rows: list[AccessRow], stem_path: Path, title: str, back: str = '',
+                 filter_note: str = '') -> tuple[Path, Path]:
     """Write <stem_path>-access.html and .csv; returns both paths."""
     table, data = stem_path.with_name(stem_path.name + '-access.html'), stem_path.with_name(stem_path.name + '-access.csv')
     table.parent.mkdir(parents=True, exist_ok=True)
-    table.write_text(render_html(rows, title, data.name, back), encoding='utf-8')
+    table.write_text(render_html(rows, title, data.name, back, filter_note), encoding='utf-8')
     data.write_text(render_csv(rows), encoding='utf-8', newline='')
     return table, data
 

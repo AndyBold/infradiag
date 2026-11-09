@@ -66,7 +66,8 @@ def grant_tooltip(principal: str, items: list[tuple]) -> str:
 
 
 def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEvidence, *, mode: str,
-                  rules: Rules, subscription_names: dict[str, str] | None = None) -> View:
+                  rules: Rules, subscription_names: dict[str, str] | None = None,
+                  prune_ungranted: bool = False) -> View:
     subscription_names = subscription_names or {}
     view = deepcopy(projection.view)
     if mode == 'none':
@@ -290,5 +291,12 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
         view.nodes.extend(detached)
         view.notes.append('Network overlay: zone / association / private endpoint. Public access is shown independently; '
                           'unknown is not disabled. Firewall rules and runtime routing are not evaluated.')
+    if prune_ungranted:
+        # Grant filters are active: an identity or principal none of whose grants survived is not drawn, nor are the
+        # attachment and configured-use edges that only led to it.
+        granted = {k for e in edges if e.kind == 'grant' for k in (e.source, e.target)}
+        gone = {k for k, n in nodes.items() if n.kind in ('identity', 'principal') and k not in granted}
+        edges = {e for e in edges if e.source not in gone and e.target not in gone}
+        view.nodes = [n for n in view.nodes if n.key not in gone]
     view.edges = sorted(edges)
     return view

@@ -19,6 +19,9 @@ class Grant:
     # Ancestor scopes do not share a resource's ARM prefix; extraction supplies membership.
     subscription: str = ''
     principal_type: str = ''
+    # 'data' (the role has any dataActions), 'control' (actions only) or '' (not known: no definition was read, or it
+    # grants nothing). Older caches have no value; filters report such grants rather than guess.
+    role_kind: str = ''
 
 
 @dataclass(frozen=True)
@@ -77,10 +80,37 @@ def canonical_role_id(role_id: str) -> str:
     return '/providers/microsoft.authorization/roledefinitions/' + role_key(rid)
 
 
+def classify_role(permissions) -> str:
+    """The plane a role definition acts on, from its permissions (notActions / notDataActions are not subtracted)."""
+    perms = [p for p in (permissions or []) if isinstance(p, dict)]
+    if any(p.get('dataActions') for p in perms):
+        return 'data'
+    return 'control' if any(p.get('actions') for p in perms) else ''
+
+
+UAI = 'microsoft.managedidentity/userassignedidentities'
+
+
+def resolve_principals(graph: Graph, evidence: SecurityEvidence) -> dict[str, tuple[str, str]]:
+    """Principal ID -> (name, kind) for every managed identity the graph or the evidence attaches."""
+    principals: dict[str, tuple[str, str]] = {}
+    for a in list(identity_attachments(graph)) + evidence.attachments:
+        if a.principal_id:
+            kind = 'managed identity (system-assigned)' if a.name.endswith('(system-assigned)') else 'managed identity (user-assigned)'
+            principals.setdefault(a.principal_id, (a.name, kind))
+    for n in graph.nodes.values():
+        if n.type == UAI:
+            for meta in n.metadata.values():
+                if pid := str((meta.get('properties') or {}).get('principalId') or '').lower():
+                    principals.setdefault(pid, (n.name, 'managed identity (user-assigned)'))
+    return principals
+
+
 def grants_from_rows(rows: list[dict], source: str = 'azure', subscription: str = '') -> SecurityEvidence:
     evidence = SecurityEvidence()
-    roles = {role_key(r['id']): (r.get('properties') or {}).get('roleName', r['id'])
-             for r in rows if str(r.get('type', '')).lower().endswith('/roledefinitions') and r.get('id')}
+    definitions = [r for r in rows if str(r.get('type', '')).lower().endswith('/roledefinitions') and r.get('id')]
+    roles = {role_key(r['id']): (r.get('properties') or {}).get('roleName', r['id']) for r in definitions}
+    kinds = {role_key(r['id']): classify_role((r.get('properties') or {}).get('permissions')) for r in definitions}
     unnamed: set[int] = set()
     for row in rows:
         if not str(row.get('type', 'microsoft.authorization/roleassignments')).lower().endswith('/roleassignments'):
@@ -99,9 +129,9 @@ def grants_from_rows(rows: list[dict], source: str = 'azure', subscription: str 
             evidence.coverage.append(f'{source}: role definition name unavailable: {role_id}')
         grant = Grant(principal.lower(), canonical_role_id(role_id), str(role_name), normalise_id(str(scope)),
                       str(props.get('condition') or ''), source, subscription.lower(),
-                      str(props.get('principalType') or ''))
+                      str(props.get('principalType') or ''), kinds.get(role_key(role_id), ''))
         # The same assignment may arrive twice with differing names; keep one, preferring the resolved name.
-        same = [i for i, g in enumerate(evidence.grants) if replace(g, role_name='') == replace(grant, role_name='')]
+        same = [i for i, g in enumerate(evidence.grants) if replace(g, role_name='', role_kind='') == replace(grant, role_name='', role_kind='')]
         if not same:
             evidence.grants.append(grant)
             if role_name == role_id:
