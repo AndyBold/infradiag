@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -14,6 +15,17 @@ from .config import ConfigError
 def matches(value: str, patterns) -> bool:
     value = value.lower()
     return any(fnmatchcase(value, p.lower()) for p in patterns)
+
+
+# Environment inference for resources with no environment tag (applications.environment_rules replaces these).
+# A rule's `pattern` is a regular expression searched in the resource's name, then in its resource group's name
+# (`on` narrows that); `environment` may use groups of the match (\\1). The first match decides. These match a name
+# that carries the environment as a whole dash-, underscore- or dot-separated word: rg-app-dev0-scus, id-api-usa-lower-scus.
+# "non-prod" is not "prod".
+DEFAULT_ENVIRONMENT_RULES = (
+    {'pattern': r'(?<!non[-_.])(?:^|(?<=[-_.]))(dev\d*|qa|uat|int|stg|stage|staging|prod|shared|lower)(?=[-_.]|$)',
+     'environment': r'\1'},
+)
 
 
 @dataclass(frozen=True)
@@ -75,9 +87,10 @@ def load_rules(path: Path) -> Rules:
 
 
 def _applications(raw) -> dict:
-    allowed = {'application_tag', 'environment_tag', 'annotations', 'overrides'}
+    allowed = {'application_tag', 'environment_tag', 'annotations', 'overrides', 'environment_rules'}
     if not isinstance(raw, dict) or set(raw) - allowed:
-        raise ConfigError('applications: expected mapping with application_tag, environment_tag, annotations, overrides')
+        raise ConfigError('applications: expected mapping with application_tag, environment_tag, annotations, overrides, '
+                          'environment_rules')
     for key in ('application_tag', 'environment_tag'):
         if key in raw and (not isinstance(raw[key], str) or not raw[key].strip()):
             raise ConfigError(f'applications.{key}: expected nonempty string')
@@ -85,6 +98,7 @@ def _applications(raw) -> dict:
         raise ConfigError('applications.annotations: expected list of tag names')
     if not isinstance(raw.get('overrides', []), list):
         raise ConfigError('applications.overrides: expected list')
+    _environment_rules(raw.get('environment_rules', []))
     for i, rule in enumerate(raw.get('overrides', [])):
         where = f'applications.overrides[{i}]'
         if not isinstance(rule, dict) or set(rule) - {'match', 'application', 'environment', 'group', 'shared', 'component', 'role'}:
@@ -99,3 +113,23 @@ def _applications(raw) -> dict:
         if any(not isinstance(v, str) or not v.strip() for k, v in rule.items() if k not in ('match', 'shared')):
             raise ConfigError(f'{where}: override values must be nonempty strings')
     return raw
+
+
+def _environment_rules(rules) -> None:
+    if not isinstance(rules, list):
+        raise ConfigError('applications.environment_rules: expected list')
+    for i, rule in enumerate(rules):
+        where = f'applications.environment_rules[{i}]'
+        if not isinstance(rule, dict) or set(rule) - {'pattern', 'environment', 'on'}:
+            raise ConfigError(f'{where}: expected mapping with pattern, environment, on')
+        if any(not isinstance(rule.get(k), str) or not rule[k].strip() for k in ('pattern', 'environment')):
+            raise ConfigError(f'{where}: pattern and environment must be nonempty strings')
+        try:
+            groups = re.compile(rule['pattern']).groups
+        except re.error as exc:
+            raise ConfigError(f'{where}.pattern: not a regular expression: {exc}') from None
+        if any(int(g) > groups for g in re.findall(r'\\(\d+)', rule['environment'])):
+            raise ConfigError(f'{where}.environment: refers to a group the pattern does not have')
+        if 'on' in rule and (not isinstance(rule['on'], list) or not rule['on']
+                             or set(rule['on']) - {'name', 'resource_group'}):
+            raise ConfigError(f'{where}.on: expected a list of name, resource_group')

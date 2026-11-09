@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
-from .views import View, ViewEdge, ViewNode
+from .views import View, ViewEdge, ViewNode, mark_drift
 
 
 @dataclass
@@ -132,5 +132,6 @@ def split_by_environment(view: View) -> list[EnvironmentView]:
         sub = View(f'{view.title}: {env}', [*mine, *(stubs[k] for k in sorted(stubs))], sorted(edges),
                    [*view.notes, f'Environment view: {env}. Other environments, external dependencies and principals '
                     'are drawn as stubs; only grants touching this environment are shown.'])
+        mark_drift(sub)  # the dominant pattern, and so which edges stand out, is this diagram's own
         result.append(EnvironmentView(env, slug_of[env], sub))
     return result

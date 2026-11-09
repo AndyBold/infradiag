@@ -5,7 +5,7 @@ from infradiag.normalise import graph_from_arg
 from infradiag.overlays import apply_overlay
 from infradiag.rules import Rules
 from infradiag.security import Grant, SecurityEvidence
-from infradiag.views import build_summary, project
+from infradiag.views import build_summary, edge_label, project
 from tests.factories import SUB, rid
 
 
@@ -319,7 +319,7 @@ def test_identity_drift_between_sources_stays_visible(in_bicep, in_azure, attach
     view = application_overlay(graph)
     (node,) = identity_nodes(view)
     assert node.sublabel == sublabel
-    assert [e.label.split(': ', 1)[1] for e in view.edges if e.kind == 'attachment'] == [attachment]
+    assert [edge_label(e).split(': ', 1)[1] for e in view.edges if e.kind == 'attachment'] == [attachment]
 
 
 def test_identity_bicep_references_but_does_not_declare_keeps_bicep_provenance():
@@ -371,7 +371,7 @@ def test_single_source_grant_keeps_a_short_only_marker_on_the_label():
     view = apply_overlay(p, graph, SecurityEvidence(grants=[Grant('u', 'r', 'Reader', f'/subscriptions/{SUB}', source='bicep')]),
                          mode='identity', rules=Rules())
     (edge,) = grant_edges(view)
-    assert edge.label == 'Reader\nbicep only | subscription scope'
+    assert edge_label(edge) == 'Reader\nbicep only | subscription scope'  # below the threshold: no pattern to summarise
 
 
 def test_configured_use_label_drops_the_property_path_which_moves_to_the_tooltip():
@@ -381,5 +381,5 @@ def test_configured_use_label_drops_the_property_path_which_moves_to_the_tooltip
     app.metadata['azure']['properties'] = {'configuration': {'registries': [{'identity': _mi}]}}
     view = application_overlay(graph, [])
     (edge,) = [e for e in view.edges if e.kind == 'configured']
-    assert edge.label == 'api: configured use (azure only)' and 'properties' not in edge.label
+    assert edge_label(edge) == 'api: configured use (azure only)' and 'properties' not in edge.label
     assert 'Configured at: properties.configuration.registries[].identity' in edge.tooltip

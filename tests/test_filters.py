@@ -254,15 +254,15 @@ def test_filtered_split_annotates_title_index_and_tables_and_uses_its_own_file_n
     names = {p.name for p in out.iterdir()}
     assert plain <= names and f'{stem}-index.html' in names and f'{stem}-access.html' in names
     index = (out / f'{stem}-index.html').read_text()
-    assert 'filtered: no resource-group scope; data-plane roles' in index and f'{stem}-unspecified.svg' in index
-    assert 'application-identity-unspecified' not in index.replace(stem, '')
+    assert 'filtered: no resource-group scope; data-plane roles' in index and f'{stem}-dev.svg' in index
+    assert 'application-identity-dev' not in index.replace(stem, '')
     table = (out / f'{stem}-access.html').read_text()
     assert 'filters-active' in table and 'same filters as the diagram' in table
     assert 'Key Vault Secrets User' in table and '>Reader<' not in table
     assert (out / f'{stem}-access.csv').read_text().count('\n') == 2  # header + the one data-plane grant
     assert (out / 'application-identity-index.html').read_text() == plain_index  # unfiltered files untouched
     assert (out / 'application-identity-access.html').read_text() == plain_table
-    assert 'Filters:' in (out / f'{stem}-unspecified.d2').read_text()
+    assert 'Filters:' in (out / f'{stem}-dev.d2').read_text()
 
 
 def test_unfiltered_render_output_has_no_filter_text(tmp_path, monkeypatch):

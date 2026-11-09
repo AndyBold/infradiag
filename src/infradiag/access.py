@@ -40,6 +40,7 @@ class AccessRow:
     source: str
     condition: str
     environment: str
+    environment_source: str = ''  # how the environment was decided: tag, override, name pattern, ... (see EnvDecision)
     covers: int = 1  # visible diagram elements this assignment reaches in this environment
 
 
@@ -47,7 +48,7 @@ COLUMNS = [
     ('principal_name', 'Principal'), ('principal_type', 'Principal type'), ('principal_id', 'Principal ID'),
     ('resource', 'Resource'), ('resource_type', 'Resource type'), ('role', 'Role'), ('scope', 'Scope'),
     ('scope_kind', 'Scope kind'), ('source', 'Source'), ('condition', 'Condition'), ('environment', 'Environment'),
-    ('covers', 'Elements covered'),
+    ('environment_source', 'Environment source'), ('covers', 'Elements covered'),
 ]
 assert [c for c, _ in COLUMNS] == [f.name for f in fields(AccessRow)]
 
@@ -77,6 +78,10 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
     def env_of(rid: str) -> str:
         key = projection.resources.get(rid)
         return env_of_key.get(key, '') if key else ''
+    decisions = projection.env_decisions
+    def source_of(rids) -> str:
+        """The distinct ways the environments of these resources were decided, e.g. 'tag, name pattern'."""
+        return ', '.join(sorted({decisions[r].source for r in rids if r in decisions}))
     def visible(rid: str) -> bool:
         n = graph.nodes[rid]
         return (STUB not in n.flags and not matches(n.name, rules.out_of_scope_names) and not (rules.hide_managed and n.managed_by)
@@ -101,7 +106,8 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
             while parent and parent not in projection.resources and '/' in parent:
                 parent = parent.rsplit('/', 1)[0]
             rows.append(AccessRow(resource=label, resource_type=node.type if node else _resource_type(scope),
-                                  environment=env_of(parent) if parent in projection.resources else '', **common))
+                                  environment=env_of(parent) if parent in projection.resources else '',
+                                  environment_source=source_of([parent]), **common))
             continue
         if kind == 'subscription':
             sub = SUBSCRIPTION.match(scope).group(1)
@@ -113,6 +119,7 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
         else:
             label, sub = 'tenant root', g.subscription.lower()
         covered: dict[str, set[str]] = {}
+        deciders: dict[str, set[str]] = {}
         for rid in graph.nodes:
             if not visible(rid):
                 continue
@@ -121,8 +128,10 @@ def build_access_rows(projection: ViewProjection, graph: Graph, evidence: Securi
                       else scope_contains(scope, rid))
             if inside:
                 covered.setdefault(env_of(rid), set()).add(projection.resources[rid])
+                deciders.setdefault(env_of(rid), set()).add(rid)
         for env, keys in sorted(covered.items()) or [('', set())]:
-            rows.append(AccessRow(resource=label, resource_type=kind, environment=env, covers=len(keys), **common))
+            rows.append(AccessRow(resource=label, resource_type=kind, environment=env, covers=len(keys),
+                                  environment_source=source_of(deciders.get(env, ())), **common))
     return sorted(rows, key=lambda r: (r.environment.casefold(), r.principal_name.casefold(), r.role.casefold(),
                                        r.scope, r.source, r.condition))
 
@@ -240,7 +249,7 @@ class IndexEntry:
     rows: int = 0
 
 
-def render_index(title: str, entries: list[IndexEntry], notes: list[str]) -> str:
+def render_index(title: str, entries: list[IndexEntry], notes: list[str], links: list[tuple[str, str]] = ()) -> str:
     esc = html.escape
     def link(href: str, text: str) -> str:
         return f'<a href="{esc(href)}">{esc(text)}</a>' if href else ''
@@ -249,6 +258,7 @@ def render_index(title: str, entries: list[IndexEntry], notes: list[str]) -> str
         f'<td>{link(e.svg, "SVG")}</td><td>{link(e.viewer, "viewer")}</td>'
         f'<td>{link(e.table, f"access table ({e.rows})") if e.table else ""}</td></tr>' for e in entries)
     extra = ''.join(f'<p class="note">{esc(n)}</p>' for n in notes)
+    extra += ''.join(f'<p class="note">{esc(text)}: {link(href, href)}</p>' for href, text in links)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)}</title><style>{STYLE}</style></head>
