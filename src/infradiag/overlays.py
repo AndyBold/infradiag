@@ -177,12 +177,14 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                     skey = scope_nodes[('subscription', sub_id)] = extra(
                         f'ss{len(nodes)}', subscription_label(sub_id, subscription_names.get(sub_id)), 'subscription', 'subscription')
                 tag = 'management group scope' if ancestor else 'subscription scope'
+                nodes[skey].covers = tuple(sorted({*nodes[skey].covers, *(mapping[r] for r in targets)}))
                 grant_edges.setdefault((key, skey), []).append((grant, tag, nodes[skey].label))
             elif to_scope_node:
                 rkey = scope_nodes.get(('resource_group', scope))
                 if rkey is None:
                     rkey = scope_nodes[('resource_group', scope)] = extra(
                         f'ss{len(nodes)}', graph.nodes[targets[0]].resource_group, 'resource group', 'resource_group')
+                nodes[rkey].covers = tuple(sorted({*nodes[rkey].covers, *(mapping[r] for r in targets)}))
                 grant_edges.setdefault((key, rkey), []).append((grant, 'resource group scope', nodes[rkey].label))
             else:
                 for rid in targets:

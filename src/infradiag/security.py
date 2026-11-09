@@ -18,6 +18,7 @@ class Grant:
     source: str = 'azure'
     # Ancestor scopes do not share a resource's ARM prefix; extraction supplies membership.
     subscription: str = ''
+    principal_type: str = ''
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,8 @@ def grants_from_rows(rows: list[dict], source: str = 'azure', subscription: str 
         if role_name == role_id:
             evidence.coverage.append(f'{source}: role definition name unavailable: {role_id}')
         grant = Grant(principal.lower(), canonical_role_id(role_id), str(role_name), normalise_id(str(scope)),
-                      str(props.get('condition') or ''), source, subscription.lower())
+                      str(props.get('condition') or ''), source, subscription.lower(),
+                      str(props.get('principalType') or ''))
         # The same assignment may arrive twice with differing names; keep one, preferring the resolved name.
         same = [i for i, g in enumerate(evidence.grants) if replace(g, role_name='') == replace(grant, role_name='')]
         if not same:

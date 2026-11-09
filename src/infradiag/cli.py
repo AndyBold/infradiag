@@ -7,9 +7,11 @@ import json
 import shutil
 import sys
 import time
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
+from .access import IndexEntry, build_access_rows, for_environment, render_index, write_access
 from .actuals import Period, last_full_month, load_actuals
 from .applications import build_application
 from .azcli import AzError
@@ -32,9 +34,10 @@ from .progress import Progress
 from .render_d2 import D2NotFound, render_d2, render_svg, view_size
 from .rules import load_rules
 from .security import SecurityEvidence, declared_security
+from .split import split_by_environment
 from .subscriptions import SubscriptionError, discover, folder_names, load_subscriptions, select, write_subscriptions
 from .viewer import write_viewer
-from .views import View, build_detailed, build_summary, project
+from .views import View, ViewProjection, build_detailed, build_summary, project
 
 VIEWS = {"detailed": "Detailed topology", "summary": "Architecture overview"}
 
@@ -210,10 +213,13 @@ def _render(cfg: Target, rules, which: str, views_path: Path, icon_dir: Path, su
         title = VIEWS[name] + suffix
         view = (build_detailed(merged, rules, title, drift_styles=styles, subscription_names=sub_names)
                 if name == "detailed" else build_summary(merged, rules, title))
-        if overlay != "none":
-            view = apply_overlay(project(view, merged), merged, _evidence(cfg, overlay), mode=overlay, rules=rules,
-                                 subscription_names=sub_names)
         stem = output_stem(name, style, overlay)
+        if overlay != "none":
+            projection, evidence = project(view, merged), _evidence(cfg, overlay)
+            view = apply_overlay(projection, merged, evidence, mode=overlay, rules=rules, subscription_names=sub_names)
+            if overlay in ("identity", "all"):
+                rows = build_access_rows(projection, merged, evidence, rules, sub_names)
+                print(write_access(rows, cfg.out_dir / stem, f"{title}: access")[0])
         _d2_svg(progress, render_d2(view, icons, style=style), cfg.out_dir / f"{stem}.d2", cfg.out_dir / f"{stem}.svg",
                 view, d2_timeout)
         print(cfg.out_dir / f"{stem}.svg")
@@ -258,18 +264,70 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     graph = merge_graphs(*graphs)
     projection = build_application(graph, rules, level=args.view, subscription_names=sub_names)
     projection.view.notes.extend(failures)
+    base = deepcopy(projection.view)
     view = apply_overlay(projection, graph, evidence, mode=args.security_overlay, rules=rules,
                          subscription_names=sub_names)
     icons = IconResolver(views_path.parent, icon_dir)
     stem = output_stem(args.view, args.style, args.security_overlay)
     out = cfg.out_dir / 'applications'
-    _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg', view,
-            args.d2_timeout)
-    print(out / f'{stem}.svg')
-    print(write_viewer(out / f'{stem}.svg'))
+    rows = None
+    if args.security_overlay in ('identity', 'all'):
+        rows = build_access_rows(ViewProjection(base, projection.resources), graph, evidence, rules, sub_names)
+        table, _csv = write_access(rows, out / stem, f'{view.title}: access', back=f'{stem}-index.html' if args.split else '')
+        print(table)
+    if args.split:
+        _render_split(progress, view, icons, args, out, stem, rows)
+    else:
+        _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg', view,
+                args.d2_timeout)
+        print(out / f'{stem}.svg')
+        print(write_viewer(out / f'{stem}.svg'))
     for note in failures:
         print(f'warning: {note}', file=sys.stderr)
     return 2 if failures else 0
+
+def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: str, rows) -> None:
+    """One diagram (and access table) per environment, then an index page linking them."""
+    parts = split_by_environment(view)
+    if not parts:
+        raise ConfigError("--split environment: the view has no environment containers to split")
+    manifest = out / f"{stem}.split.json"
+    stale = [out / f"{stem}.d2", out / f"{stem}.svg", out / f"{stem}.html"]  # the whole-view diagram this split replaces
+    if manifest.exists():
+        try:
+            stale += [out / name for name in json.loads(manifest.read_text())]
+        except (ValueError, TypeError):
+            pass
+    written: list[str] = []
+    entries = [IndexEntry(f"All environments ({view.title})", *view_size(view), "", "",
+                          f"{stem}-access.html" if rows is not None else "", len(rows or ()))]
+    for n, part in enumerate(parts, 1):
+        progress.line(f"environment {n}/{len(parts)}: {part.environment}")
+        name = f"{stem}-{part.slug}"
+        _d2_svg(progress, render_d2(part.view, icons, style=args.style), out / f"{name}.d2", out / f"{name}.svg",
+                part.view, args.d2_timeout)
+        print(out / f"{name}.svg")
+        print(write_viewer(out / f"{name}.svg"))
+        written += [f"{name}.d2", f"{name}.svg", f"{name}.html"]
+        table, count = "", 0
+        if rows is not None:
+            mine = for_environment(rows, part.environment)
+            table = write_access(mine, out / name, f"{part.view.title}: access", back=f"{stem}-index.html")[0].name
+            count = len(mine)
+            written += [f"{name}-access.html", f"{name}-access.csv"]
+        viewer = f"{name}.html"
+        entries.append(IndexEntry(part.environment, *view_size(part.view), f"{name}.svg", viewer, table, count))
+    for path in stale:
+        if path.name not in written:
+            path.unlink(missing_ok=True)
+    manifest.write_text(json.dumps(written), encoding="utf-8")
+    notes = ["Each environment is its own diagram; other environments, external dependencies and principals appear as "
+             "stubs. Counts are nodes/containers and edges. The first row is the whole view: its access table is "
+             "complete, its diagram is not drawn when split."]
+    index = out / f"{stem}-index.html"
+    index.write_text(render_index(f"{view.title}: by environment", entries, notes), encoding="utf-8")
+    print(index)
+
 
 def _positive_int(text: str) -> int:
     try:
@@ -306,6 +364,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="all retains detailed + summary; application/context combine selected subscriptions")
     rd.add_argument("--style", choices=["azure", "c4"], default="azure")
     rd.add_argument("--security-overlay", choices=["none", "identity", "network", "all"], default="none")
+    rd.add_argument("--split", choices=["environment"], default=None,
+                    help="application/context views: one diagram per environment (and one access table per environment "
+                         "with an identity overlay) plus an index page, instead of the whole view in one diagram")
     rd.add_argument("--d2-timeout", type=_positive_int, metavar="SECONDS", default=None,
                     help="give up on a diagram if d2's layout takes longer than this (default: no limit beyond d2's own)")
     co = sub.add_parser("cost", parents=[per_sub],
@@ -335,6 +396,8 @@ def main(argv: list[str] | None = None) -> int:
         rules = None if args.command in ("extract", "cost") else load_rules(views_path)
         if args.command == "icons":
             return _icons(rules, views_path, icon_dir)
+        if args.command == "render" and args.split and args.view not in ("application", "context"):
+            raise ConfigError("--split environment needs --view application or --view context")
         chosen, sub_names = _targets(cfg, args)
         if args.command == "render" and args.view in ("application", "context"):
             return _render_application(cfg, chosen, rules, args, views_path, icon_dir, sub_names, Progress())

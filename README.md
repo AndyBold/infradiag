@@ -49,7 +49,7 @@ infradiag --config ~/diagrams/my-platform/infradiag.yaml diff
 ```bash
 infradiag extract [--bicep | --azure]    # re-run only what-if or only Resource Graph
 infradiag diff
-infradiag render [--view detailed|summary|all] [--d2-timeout SECONDS]
+infradiag render [--view detailed|summary|all] [--split environment] [--d2-timeout SECONDS]
 infradiag cost [--actual [--from YYYY-MM-DD --to YYYY-MM-DD]] [--detail] [--refresh]
 infradiag icons                          # download icons your views use into cache/icons/
 infradiag init [DIR] [--force]           # starter infradiag.yaml + views.yaml
@@ -243,6 +243,34 @@ subscription node; a resource-group assignment is one edge to a resource-group n
 covers more than one visible element; a resource-scope assignment stays on the resource.
 Edges between the same two nodes are merged into one that lists the roles (the first three,
 then `+N more`) with the sources, scopes and conditions summarised.
+
+### Access table
+
+With `--security-overlay identity|all`, `render` also writes `<stem>-access.html` and
+`<stem>-access.csv` next to the diagram (`<stem>` is the diagram's file name without
+`.svg`, e.g. `application-c4-identity`). One row per role assignment and environment, built
+from every grant in the evidence before the diagram merges or collapses edges: principal
+(name, type, ID), resource and resource type, role, scope and scope kind (resource / resource
+group / subscription / management group), source (`bicep` or `azure`), condition,
+environment, and how many drawn elements a broad scope covers. The page is self-contained
+(no network, no CDN, no server): click a column heading to sort, type in the top box to
+filter every column or in a column's own box to filter that column; the row count updates.
+It opens from a `\\wsl.localhost\...` path or `file://`. Resources are not tagged outside
+the application views, so their environment column is empty.
+
+### One diagram per environment
+
+`infradiag render --view application --split environment` (also `--view context`) replaces
+the single whole-view diagram with one diagram per environment, taken from the application
+model (the environment tag or override), plus `<stem>-index.html` linking each diagram with
+its node and edge counts. Each environment's diagram holds that environment's applications in
+full. What they connect to outside it (another environment, shared services, external
+dependencies, principals) is drawn as a compact labelled stub, and only identity grants that
+touch the environment are drawn; a subscription or resource-group grant is a stub that says
+how many of the environment's elements it covers. With an identity overlay every environment
+also gets its own access table (`<stem>-<environment>-access.html`) and the index links the
+whole-view table, which is complete even though the whole-view diagram is not drawn. If a
+sibling `<stem>-<environment>.html` viewer exists beside a diagram the index links it too.
 
 ### Large views and layout time
 
