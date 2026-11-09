@@ -149,7 +149,7 @@ def rows_for(level='application'):
 
 
 def test_every_grant_is_in_the_table_including_subscription_and_mg_scope_and_uncovered_ones():
-    rows, ids = rows_for()
+    rows, _ids = rows_for()
     by_role = {}
     for r in rows:
         by_role.setdefault(r.role, []).append(r)
