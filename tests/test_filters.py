@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from infradiag import cli
 from infradiag.access import build_access_rows
 from infradiag.applications import build_application
@@ -12,7 +10,7 @@ from infradiag.security import Grant, SecurityEvidence, classify_role, grants_fr
 from tests.factories import SUB, rid
 from tests.test_cli import SUB as CLI_SUB
 from tests.test_cli import capture_d2, setup
-from tests.test_overlays import grant_edges, many_resource_graph
+from tests.test_overlays import many_resource_graph
 
 SUBSCOPE = f'/subscriptions/{SUB}'
 MG = '/providers/microsoft.management/managementgroups/root'
@@ -84,7 +82,8 @@ def test_plane_and_name_are_filled_from_another_grant_of_the_same_role_definitio
 def test_principal_kind_uses_visible_identities_then_recorded_type_then_unresolved():
     graph = many_resource_graph()
     ev = evidence()
-    kinds = lambda *k: {g.principal_id for g in filter_evidence(ev, graph, GrantFilter(principal_kinds=frozenset(k)))[0].grants}
+    def kinds(*k):
+        return {g.principal_id for g in filter_evidence(ev, graph, GrantFilter(principal_kinds=frozenset(k)))[0].grants}
     assert kinds('user') == {'user1'} and kinds('group') == {'grp1'}
     assert kinds('service-principal') == {'sp1'}  # the bicep copy has no type: it is unresolved, not a service principal
     assert kinds('unresolved') == {'ghost', 'sp1'}
@@ -156,7 +155,7 @@ def test_grants_from_rows_records_the_role_plane_from_cached_definitions():
 
 
 def test_old_cache_grants_load_without_a_role_plane():
-    assert Grant(**{'principal_id': 'p', 'role_id': 'r', 'role_name': 'n', 'scope': 's'}).role_kind == ''
+    assert Grant('p', 'r', 'n', 's').role_kind == ''
 
 
 def overlay(ev, flt, graph=None):

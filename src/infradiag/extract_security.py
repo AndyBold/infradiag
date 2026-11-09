@@ -17,7 +17,7 @@ GUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 
 def unresolved_role_guids(rows: list[dict]) -> list[str]:
-    """GUIDs of assigned roles with neither a definition row nor an inline role name."""
+    """GUIDs of assigned roles with no definition row. An inline role name does not count: the plane needs permissions."""
     defined = {role_key(r['id']) for r in rows
                if str(r.get('type', '')).lower().endswith('/roledefinitions') and r.get('id')}
     missing = set()
@@ -26,7 +26,7 @@ def unresolved_role_guids(rows: list[dict]) -> list[str]:
             continue
         props = row.get('properties') or row
         key = role_key(str(props.get('roleDefinitionId') or ''))
-        if key and key not in defined and not row.get('roleDefinitionName') and GUID.match(key):
+        if key and key not in defined and GUID.match(key):
             missing.add(key)
     return sorted(missing)
 
