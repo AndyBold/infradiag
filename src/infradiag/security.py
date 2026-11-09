@@ -1,7 +1,7 @@
 """Security evidence, kept separate from topology and effective-access assertions."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .ids import normalise_id
 from .model import Graph
@@ -63,10 +63,24 @@ def identity_attachments(graph: Graph) -> list[Attachment]:
     return sorted(set(result), key=lambda a: (a.workload, a.source, a.identity_id))
 
 
+def role_key(role_id: str) -> str:
+    """Role definitions are matched by GUID: Resource Graph returns assignments in tenant form
+    (/providers/...) but definitions in subscription form (/subscriptions/<sub>/providers/...)."""
+    return normalise_id(role_id).rsplit('/', 1)[-1]
+
+
+def canonical_role_id(role_id: str) -> str:
+    rid = normalise_id(role_id)
+    if '/providers/microsoft.authorization/roledefinitions/' not in rid:
+        return rid
+    return '/providers/microsoft.authorization/roledefinitions/' + role_key(rid)
+
+
 def grants_from_rows(rows: list[dict], source: str = 'azure', subscription: str = '') -> SecurityEvidence:
     evidence = SecurityEvidence()
-    roles = {normalise_id(r['id']): (r.get('properties') or {}).get('roleName', r['id'])
+    roles = {role_key(r['id']): (r.get('properties') or {}).get('roleName', r['id'])
              for r in rows if str(r.get('type', '')).lower().endswith('/roledefinitions') and r.get('id')}
+    unnamed: set[int] = set()
     for row in rows:
         if not str(row.get('type', 'microsoft.authorization/roleassignments')).lower().endswith('/roleassignments'):
             continue
@@ -79,13 +93,20 @@ def grants_from_rows(rows: list[dict], source: str = 'azure', subscription: str 
             continue
         if any(UNEVALUATED.match(str(v)) for v in (principal, role_id, scope)):
             evidence.coverage.append(f'{source}: unresolved role assignment expression')
-        role_name = roles.get(normalise_id(role_id), row.get('roleDefinitionName') or role_id)
+        role_name = roles.get(role_key(role_id), row.get('roleDefinitionName') or role_id)
         if role_name == role_id:
             evidence.coverage.append(f'{source}: role definition name unavailable: {role_id}')
-        grant = Grant(principal.lower(), normalise_id(role_id), str(role_name), normalise_id(str(scope)),
+        grant = Grant(principal.lower(), canonical_role_id(role_id), str(role_name), normalise_id(str(scope)),
                       str(props.get('condition') or ''), source, subscription.lower())
-        if grant not in evidence.grants:
+        # The same assignment may arrive twice with differing names; keep one, preferring the resolved name.
+        same = [i for i, g in enumerate(evidence.grants) if replace(g, role_name='') == replace(grant, role_name='')]
+        if not same:
             evidence.grants.append(grant)
+            if role_name == role_id:
+                unnamed.add(len(evidence.grants) - 1)
+        elif same[0] in unnamed and role_name != role_id:
+            evidence.grants[same[0]] = grant
+            unnamed.discard(same[0])
     return evidence
 
 
