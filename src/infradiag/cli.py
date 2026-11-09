@@ -38,6 +38,7 @@ from .rules import load_rules
 from .security import SecurityEvidence, declared_security
 from .split import split_by_environment
 from .subscriptions import SubscriptionError, discover, folder_names, load_subscriptions, select, write_subscriptions
+from .untagged import write_untagged
 from .viewer import write_viewer
 from .views import View, ViewProjection, build_detailed, build_summary, project
 
@@ -282,14 +283,21 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     icons = IconResolver(views_path.parent, icon_dir)
     stem = output_stem(args.view, args.style, args.security_overlay, flt.suffix())
     out = cfg.out_dir / 'applications'
+    untagged = out / f'{stem}-untagged.csv'
+    env_report = write_untagged(projection.env_decisions, graph, untagged,
+                                rules.applications.get('environment_tag', 'environment'))
+    print(untagged)
+    env_note = env_report.summary(untagged.name) if env_report.inferred or env_report.unspecified else ''
+    if env_note and not args.split:
+        view.notes.append(env_note)
     rows = None
     if args.security_overlay in ('identity', 'all'):
-        rows = build_access_rows(ViewProjection(base, projection.resources), graph, evidence, rules, sub_names)
+        rows = build_access_rows(ViewProjection(base, projection.resources, projection.env_decisions), graph, evidence, rules, sub_names)
         table, _csv = write_access(rows, out / stem, f'{view.title}: access', back=f'{stem}-index.html' if args.split else '',
                               filter_note=report.text)
         print(table)
     if args.split:
-        _render_split(progress, view, icons, args, out, stem, rows, report)
+        _render_split(progress, view, icons, args, out, stem, rows, report, untagged.name, env_note)
     else:
         _d2_svg(progress, render_d2(view, icons, style=args.style), out / f'{stem}.d2', out / f'{stem}.svg', view,
                 args.d2_timeout)
@@ -300,7 +308,7 @@ def _render_application(cfg: Config, targets: list[Target], rules, args, views_p
     return 2 if failures else 0
 
 def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: str, rows,
-                  report: FilterReport | None = None) -> None:
+                  report: FilterReport | None = None, untagged: str = "", env_note: str = "") -> None:
     """One diagram (and access table) per environment, then an index page linking them."""
     report = report or FilterReport([])
     parts = split_by_environment(view)
@@ -337,11 +345,13 @@ def _render_split(progress: Progress, view: View, icons, args, out: Path, stem: 
         if path.name not in written:
             path.unlink(missing_ok=True)
     manifest.write_text(json.dumps(written), encoding="utf-8")
-    notes = [*report.lines, "Each environment is its own diagram; other environments, external dependencies and principals appear as "
+    notes = [*report.lines, *([env_note] if env_note else []), "Each environment is its own diagram; other environments, external dependencies and principals appear as "
              "stubs. Counts are nodes/containers and edges. The first row is the whole view: its access table is "
              "complete, its diagram is not drawn when split."]
     index = out / f"{stem}-index.html"
-    index.write_text(render_index(f"{view.title}: by environment", entries, notes), encoding="utf-8")
+    index.write_text(render_index(f"{view.title}: by environment", entries, notes,
+                                  [(untagged, "Resources placed in an environment by rule, and those still unspecified")]
+                                  if untagged else []), encoding="utf-8")
     print(index)
 
 

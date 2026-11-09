@@ -236,14 +236,48 @@ choosing an arbitrary owner or classification. `dataClassification` describes se
 it is not evidence that an access restriction is enforced. Shared services can use an
 explicit shared application boundary, retaining dependencies to consuming applications.
 
+### Environment of untagged resources
+
+A resource's environment is decided in this order, and the first that applies wins, so a real tag is never
+overridden by a guess:
+
+1. an `overrides` rule with `environment` (source `override`);
+2. the environment tag (source `tag`);
+3. `environment_rules`, regular expressions searched (`re.search`) in the resource's **name**, then in its
+   **resource group's** name (sources `name pattern`, `resource group pattern`). The first matching rule wins;
+   `environment` may use groups of the match (`\1`) and `on: [name, resource_group]` limits where a rule looks;
+4. otherwise `unspecified`.
+
+Without `environment_rules` a default rule applies: a name or resource group that contains `dev`, `dev<N>`, `qa`, `uat`,
+`int`, `stg`, `stage`, `staging`, `prod`, `shared` or `lower` as a whole word between `-`, `_` or `.` (`rg-app-dev0-scus`
+is `dev0`; `non-prod` is not `prod`). Setting `environment_rules` replaces the default, and `environment_rules: []`
+turns inference off.
+
+```yaml
+applications:
+  environment_rules:
+    - pattern: '-(dev\d+|qa)-'          # name, then resource group
+      environment: '\1'
+    - pattern: '^rg-platform-'
+      environment: shared
+      on: [resource_group]
+```
+
+How each resource was decided is on the hover of its element in the diagram (`Environment: dev0 (resource group
+pattern: ...)`), and in the access table's *Environment source* column. Every application or context render also writes
+`<stem>-untagged.csv`: each resource placed by a rule (with the rule, what matched and the `environment=<value>` tag that
+would make it explicit) and each still `unspecified`. That is the list to fix in the Bicep tags; the split index
+links it and counts them.
+
 ### Security overlays and coverage
 
 `--security-overlay none|identity|network|all` defaults to `none` and works with either
 style and every view. Purple relationships distinguish **identity attachment**, explicit
 **configured use**, and **RBAC grants**. A grant edge's label is short: the roles (first three) and the
 scope kind, plus `conditional` when a condition applies. Attachment and configured-use labels name the
-workload only. Provenance is on the label only as `azure only` / `bicep only` (drift: one source
-evidences the edge); edges both sources evidence show nothing. The rest is on hover (in the SVG and in
+workload only. Provenance is on a label only as `azure only` / `bicep only` (drift: one source
+evidences the edge); edges both sources evidence show nothing, and so does an edge that matches its diagram's
+dominant pattern (see below). The rest is on hover (in the SVG and in
 the pan/zoom viewer): identity and target names, sources, every role, every scope the edge merges, the
 full condition text, and the property paths of configured use. Aggregated views retain workload names in security
 relationships or annotations when the endpoints collapse into the same visible element.
@@ -258,6 +292,15 @@ subscription node; a resource-group assignment is one edge to a resource-group n
 covers more than one visible element; a resource-scope assignment stays on the resource.
 Edges between the same two nodes are merged into one that lists the roles (the first three,
 then `+N more`) with the sources, scopes and conditions summarised.
+
+**Drift note.** Most Azure role assignments have no Bicep declaration, so marking every such grant edge `azure only`
+buries the few edges where Bicep and Azure really disagree. Per diagram (each environment diagram of a `--split` on its
+own, and with any overlay filter, including `--drift-only`): when at least 5 grant edges are drawn and more than half
+are evidenced by the same single source, those edges carry no marker and one legend note says so ("N of M grant edges
+are Azure-only (not declared in Bicep)", or "Bicep-only (declared in Bicep, not found in Azure)"). Only the one-source
+edges that go against that pattern keep their `azure only` / `bicep only` marker, and attachment and configured-use
+edges always keep theirs. With fewer than 5 grant edges, or no majority, every one-source edge is marked as before.
+Sources stay on every edge's hover, and the access table is unchanged.
 
 ### Access table
 
@@ -315,7 +358,8 @@ its node and edge counts. Each environment's diagram holds that environment's ap
 full. What they connect to outside it (another environment, shared services, external
 dependencies, principals) is drawn as a compact labelled stub, and only identity grants that
 touch the environment are drawn; a subscription or resource-group grant is a stub that says
-how many of the environment's elements it covers. With an identity overlay every environment
+how many of the environment's elements it covers. Resources without an environment tag are placed by
+[inference](#environment-of-untagged-resources) first, so `unspecified` holds only what no rule matches. With an identity overlay every environment
 also gets its own access table (`<stem>-<environment>-access.html`) and the index links the
 whole-view table, which is complete even though the whole-view diagram is not drawn. If a
 sibling `<stem>-<environment>.html` viewer exists beside a diagram the index links it too.

@@ -1,18 +1,46 @@
 """Tag-based application projections with explicit, ordered membership overrides."""
 from __future__ import annotations
 
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 from fnmatch import fnmatchcase
 
 from .model import STUB, Graph, Node
-from .rules import Rules
-from .views import View, ViewEdge, ViewNode, ViewProjection, filter_graph, short_type
+from .rules import DEFAULT_ENVIRONMENT_RULES, Rules
+from .views import EnvDecision, View, ViewEdge, ViewNode, ViewProjection, filter_graph, short_type
 
 EXTERNAL = 'External dependencies'
 
 
 def tags_for(node: Node) -> dict[str, str]:
     return {k.casefold(): str(v).strip() for k, v in node.tags.items()}
+
+
+def decide_environment(n: Node, tags: dict[str, str], override: dict, override_index: int, config: dict) -> EnvDecision:
+    """The environment of one resource and how it was decided, in priority order: an explicit override, the environment
+    tag (a real tag is never replaced by a guess), the first environment rule that matches the resource's name, then the
+    first that matches its resource group's name; otherwise 'unspecified'."""
+    if override.get('environment'):
+        return EnvDecision(override['environment'], 'override', f'applications.overrides[{override_index}]')
+    tag = config.get('environment_tag', 'environment')
+    if value := tags.get(tag.casefold()):
+        return EnvDecision(value, 'tag', f'{tag}={value}')
+    custom = 'environment_rules' in config
+    rules = config['environment_rules'] if custom else DEFAULT_ENVIRONMENT_RULES
+    for where, text in (('name', n.name), ('resource_group', n.resource_group)):
+        for i, rule in enumerate(rules):
+            if where in rule.get('on', ('name', 'resource_group')) and text and (m := re.search(rule['pattern'], text)):
+                label = 'resource group' if where == 'resource_group' else 'name'
+                rule_name = f'applications.environment_rules[{i}]' if custom else 'default environment rule'
+                return EnvDecision(m.expand(rule['environment']), f'{label} pattern',
+                                   f"{rule_name} matched '{m.group(0)}' in {text}")
+    return EnvDecision('unspecified', 'unspecified', 'no environment tag, override or matching rule')
+
+
+def _decision_tooltip(decisions: list[EnvDecision]) -> str:
+    counts = Counter(d.text() for d in decisions)
+    return 'Environment: ' + '\n'.join(t + (f' x{c}' if c > 1 else '') for t, c in sorted(counts.items())[:6]) + (
+        f'\n+{len(counts) - 6} more' if len(counts) > 6 else '')
 
 
 def _annotation(nodes: list[Node], keys: list[str]) -> tuple[str, ...]:
@@ -31,12 +59,16 @@ def build_application(graph: Graph, rules: Rules, *, level: str,
     config = rules.applications
     groups = defaultdict(list)
     settings = {}
+    decisions: dict[str, EnvDecision] = {}
     for rid, n in sorted(g.nodes.items()):
         tags = tags_for(n)
-        override = next((r for r in config.get('overrides', []) if all(
-            fnmatchcase(str(getattr(n, k)).casefold(), v.casefold()) for k, v in r['match'].items())), {})
+        index, override = next(((i, r) for i, r in enumerate(config.get('overrides', [])) if all(
+            fnmatchcase(str(getattr(n, k)).casefold(), v.casefold()) for k, v in r['match'].items())), (-1, {}))
         app = override.get('application') or tags.get(config.get('application_tag', 'application').casefold()) or 'Unclassified infrastructure'
-        env = override.get('environment') or tags.get(config.get('environment_tag', 'environment').casefold()) or 'unspecified'
+        decision = decide_environment(n, tags, override, index, config)
+        env = decision.environment
+        if STUB not in n.flags:
+            decisions[rid] = decision
         if STUB in n.flags:
             app = EXTERNAL
         # Explicit group permits merging subscriptions; environments always remain distinct.
@@ -53,7 +85,9 @@ def build_application(graph: Graph, rules: Rules, *, level: str,
         boundary = ViewNode(f'a{i}', app, f'{env} | {scope_label}' + (' | shared service' if shared else '') +
                             ''.join('\n' + x for x in annotations), kind='system' if level == 'context' else 'application',
                             resource_ids=tuple(n.id for n in members) if level == 'context' else (),
-                            environment='' if all(STUB in n.flags for n in members) else env)
+                            environment='' if all(STUB in n.flags for n in members) else env,
+                            tooltip=_decision_tooltip([decisions[n.id] for n in members if n.id in decisions])
+                            if level == 'context' and any(n.id in decisions for n in members) else '')
         roots.append(boundary)
         components = defaultdict(list)
         for n in members:
@@ -74,7 +108,9 @@ def build_application(graph: Graph, rules: Rules, *, level: str,
                                                   (role + ' | ' if role else '') + technologies,
                                                   icon=rules.icons.get(first.type), kind='component',
                                                   resource_ids=tuple(n.id for n in component),
-                                                  annotations=_annotation(component, config.get('annotations', []))))
+                                                  annotations=_annotation(component, config.get('annotations', [])),
+                                                  tooltip=_decision_tooltip([decisions[n.id] for n in component if n.id in decisions])
+                                                  if any(n.id in decisions for n in component) else ''))
             mapping.update((n.id, key) for n in component)
     edges = {ViewEdge(mapping[e.source], mapping[e.target], e.label if e.kind == 'collapsed' else 'dependency',
                       'dashed' if e.kind == 'endpoint' else 'solid') for e in g.edges
@@ -83,4 +119,4 @@ def build_application(graph: Graph, rules: Rules, *, level: str,
     if any(not n.tags for n in g.nodes.values() if STUB not in n.flags):
         notes.append('Some resources have no tags; membership is unclassified unless overridden. Refresh extract for old caches.')
     return ViewProjection(View('Application architecture' if level == 'application' else 'System context', roots,
-                               sorted(edges), notes), mapping)
+                               sorted(edges), notes), mapping, decisions)

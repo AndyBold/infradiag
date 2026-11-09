@@ -12,7 +12,7 @@ from .normalise import INLINE_CHILDREN, UNEVALUATED
 from .rules import Rules, matches
 from .security import SecurityEvidence, identity_attachments, scope_contains
 from .subscriptions import subscription_label
-from .views import View, ViewEdge, ViewNode, ViewProjection
+from .views import View, ViewEdge, ViewNode, ViewProjection, mark_drift
 
 SUBSCRIPTION_SCOPE = re.compile(r'^/subscriptions/([^/]+)$')
 RESOURCE_GROUP_SCOPE = re.compile(r'^/subscriptions/[^/]+/resourcegroups/[^/]+$')
@@ -31,20 +31,14 @@ def _role_label(name: str) -> str:
     return name.rsplit('/', 1)[-1] if name.startswith('/') else name
 
 
-def _only(sources) -> str:
-    """Provenance on a label only when one source alone evidences the edge (drift); both sources go on the hover."""
-    return f' ({next(iter(sources))} only)' if len(set(sources)) == 1 else ''
-
-
 def grant_label(principal: str, items: list[tuple]) -> str:
     """The short edge label for every grant between a principal and a target: roles, then sources and scope kind.
 
     The edge already joins the principal to the target, so neither is repeated. Everything long (principal and target
-    names, every role and scope, conditions) is in grant_tooltip, shown on hover."""
+    names, every role and scope, conditions) is in grant_tooltip, shown on hover. A one-source drift marker is not part
+    of the label: mark_drift decides per diagram whether to draw it (see ViewEdge.drift, views.edge_label)."""
     grants = [g for g, _tag, _name in items]
-    sources = {g.source for g in grants}
-    detail = [*([f'{next(iter(sources))} only'] if len(sources) == 1 else []),
-              ' / '.join(dict.fromkeys(t for _g, t, _n in items))]
+    detail = [' / '.join(dict.fromkeys(t for _g, t, _n in items))]
     if any(g.condition for g in grants):
         detail.append('conditional')
     return _listed([_role_label(g.role_name) for g in grants], MAX_ROLES) + '\n' + ' | '.join(detail)
@@ -89,9 +83,10 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
     def attribution(n):
         return n.name if counts[n.name.casefold()] == 1 else f'{n.name} [{n.resource_group}; {n.subscription}]'
     edges = set(view.edges)
-    def link(s, t, label, kind, tooltip=''):
+    def link(s, t, label, kind, tooltip='', sources=()):
         if s != t:
-            edges.add(ViewEdge(s, t, label, 'dashed' if kind == 'attachment' else 'solid', kind, tooltip))
+            edges.add(ViewEdge(s, t, label, 'dashed' if kind == 'attachment' else 'solid', kind, tooltip,
+                               tuple(sorted(set(sources)))))
         else:
             note = f'Within {nodes[s].label}: {label}'
             if note not in nodes[s].annotations:
@@ -152,7 +147,7 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
             tip = [f'{wname} → {nodes[key].label}: {what}', 'Sources: ' + ', '.join(sorted(sources))]
             if paths:
                 tip.append('Configured at: ' + ', '.join(sorted(paths)))
-            link(wkey, key, f'{wname}: {what}{_only(sources)}', kind, '\n'.join(tip))
+            link(wkey, key, f'{wname}: {what}', kind, '\n'.join(tip), sources)
         grant_edges: dict[tuple[str, str], list[tuple]] = {}
         scope_nodes: dict[tuple[str, str], str] = {}
         for grant in evidence.grants:
@@ -223,7 +218,8 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                     tag = 'resource scope' if scope == rid else 'inherited'
                     grant_edges.setdefault((key, mapping[rid]), []).append((grant, tag, attribution(graph.nodes[rid])))
         for (pkey, tkey), items in grant_edges.items():
-            link(pkey, tkey, grant_label(nodes[pkey].label, items), 'grant', grant_tooltip(nodes[pkey].label, items))
+            link(pkey, tkey, grant_label(nodes[pkey].label, items), 'grant', grant_tooltip(nodes[pkey].label, items),
+                 {g.source for g, _tag, _name in items})
         for key, (identity_id, sources, pids) in provenance.items():
             # Where the identity resource exists, plus where it is attached or granted: Bicep may only reference an
             # identity it does not declare.
@@ -299,4 +295,4 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
         edges = {e for e in edges if e.source not in gone and e.target not in gone}
         view.nodes = [n for n in view.nodes if n.key not in gone]
     view.edges = sorted(edges)
-    return view
+    return mark_drift(view)

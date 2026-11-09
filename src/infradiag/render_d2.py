@@ -16,7 +16,7 @@ from typing import Self
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
-from .views import View, ViewNode
+from .views import View, ViewNode, edge_label
 
 ICON_BASE = "https://icons.terrastruct.com/"
 TICK_SECONDS = 60  # how often render_svg reports that d2 is still running
@@ -39,7 +39,7 @@ class D2NotFound(Exception):
 
 
 def _q(text: str) -> str:
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("$", "\\$")  # `$` starts a d2 substitution
     return f'"{escaped}"'
 
 
@@ -75,6 +75,8 @@ def _emit(node: ViewNode, parent_path: str, depth: int, lines: list[str], paths:
             body.append(f'{pad}  style.stroke-dash: 4')
     if node.kind in ("identity", "network"):
         body.append(f'{pad}  style.fill: "{"#f3e5f5" if node.kind == "identity" else "#e0f2f1"}"')
+    if node.tooltip:
+        body.append(f"{pad}  tooltip: {_q(node.tooltip)}")
     if node.icon and style != "c4":
         body.append(f"{pad}  icon: {_q(icon_href(node.icon))}")
     if node.style != "normal":
@@ -98,7 +100,7 @@ def render_d2(view: View, icon_href: Callable[[str], str] = icon_url, *, style: 
         _emit(node, "", 0, lines, paths, icon_href, style)
     for edge in view.edges:
         line = f"{paths[edge.source]} -> {paths[edge.target]}"
-        label = edge.label or ("dependency" if style == "c4" else "")
+        label = edge_label(edge) or ("dependency" if style == "c4" else "")
         if style == "c4" or edge.kind != "dependency":
             label = "\n".join(fill(line, 72) for line in label.splitlines())
         attrs = []

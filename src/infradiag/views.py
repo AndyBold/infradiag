@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
 
 from .edges import get_path
@@ -29,6 +30,8 @@ class ViewNode:
     environment: str = ""
     # Overlay scope nodes (subscription / resource group): keys of the view elements the grants beneath them cover.
     covers: tuple[str, ...] = ()
+    # Hover text for the node (d2 draws it as a tooltip).
+    tooltip: str = ""
 
 
 @dataclass(frozen=True, order=True)
@@ -40,6 +43,56 @@ class ViewEdge:
     kind: str = "dependency"
     # Shown on hover rather than drawn on the label (the SVG gets it as a <title>; see render_d2.add_edge_tooltips).
     tooltip: str = ""
+    # The sources (bicep / azure) that evidence an overlay edge, and the per-edge drift marker mark_drift decided on
+    # for the diagram this edge is drawn in ("azure only"; empty when both sources agree or the note covers it).
+    sources: tuple[str, ...] = ()
+    drift: str = ""
+
+
+def edge_label(edge: ViewEdge) -> str:
+    """The label as drawn: the drift marker joins the detail line of a grant ("azure only | subscription scope"),
+    or follows a single-line label in brackets."""
+    if not edge.drift:
+        return edge.label
+    lines = edge.label.split("\n")
+    if len(lines) > 1:
+        lines[1] = f"{edge.drift} | {lines[1]}"
+    else:
+        lines[0] += f" ({edge.drift})"
+    return "\n".join(lines)
+
+
+DRIFT_NOTE = "Drift note: "
+DRIFT_MIN_GRANTS = 5  # a diagram with fewer grant edges marks every one-source edge, as there is no pattern to summarise
+DRIFT_MAJORITY = 0.5  # one source evidencing more than this share of a diagram's grant edges is its dominant pattern
+DRIFT_MEANING = {"azure": "Azure-only (not declared in Bicep)", "bicep": "Bicep-only (declared in Bicep, not found in Azure)"}
+
+
+def mark_drift(view: View) -> View:
+    """Decide, for this diagram, which overlay edges carry a one-source drift marker (in place; safe to repeat).
+
+    When more than DRIFT_MAJORITY of a diagram's grant edges (at least DRIFT_MIN_GRANTS of them) are evidenced by the same
+    single source, that is the diagram's normal state (most Azure role assignments have no Bicep declaration), so those
+    edges lose the marker and one note says so; only the other one-source edges keep theirs and stand out. Attachment and
+    configured-use edges, and every edge below the threshold, keep their marker. Sources stay in each edge's hover."""
+    grants = [e for e in view.edges if e.kind == "grant"]
+    alone = Counter(next(iter(set(e.sources))) for e in grants if len(set(e.sources)) == 1)
+    dominant = ""
+    if len(grants) >= DRIFT_MIN_GRANTS and alone:
+        source, count = alone.most_common(1)[0]
+        if count / len(grants) > DRIFT_MAJORITY:
+            dominant = source
+    edges = []
+    for e in view.edges:
+        only = next(iter(set(e.sources))) if len(set(e.sources)) == 1 else ""
+        edges.append(replace(e, drift=f"{only} only" if only and not (e.kind == "grant" and only == dominant) else ""))
+    view.edges = sorted(edges)
+    view.notes = [n for n in view.notes if not n.startswith(DRIFT_NOTE)]
+    if dominant:
+        view.notes.append(f"{DRIFT_NOTE}{alone[dominant]} of {len(grants)} grant edges are {DRIFT_MEANING[dominant]}, so they are "
+                          "not marked one by one (hover an edge for its sources). Any edge marked with a source is "
+                          "evidenced by that source alone, against the pattern.")
+    return view
 
 
 @dataclass
@@ -50,10 +103,28 @@ class View:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class EnvDecision:
+    """How a resource's environment was decided. `source` is one of tag, override, name pattern, resource group
+    pattern, or unspecified; `detail` names the tag, override or rule (and what it matched) that decided it."""
+    environment: str
+    source: str
+    detail: str = ""
+
+    @property
+    def inferred(self) -> bool:
+        return self.source in ("name pattern", "resource group pattern")
+
+    def text(self) -> str:
+        return f"{self.environment} ({self.source}{': ' + self.detail if self.detail else ''})"
+
+
 @dataclass
 class ViewProjection:
     view: View
     resources: dict[str, str]
+    # Application views: the environment decision for every resource drawn (resource ID -> decision).
+    env_decisions: dict[str, EnvDecision] = field(default_factory=dict)
 
 
 def project(view: View, graph: Graph) -> ViewProjection:

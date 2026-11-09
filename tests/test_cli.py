@@ -398,11 +398,11 @@ def test_split_environment_writes_a_diagram_and_table_per_environment_and_an_ind
     names = sorted(p.name for p in out.iterdir())
     assert 'application-identity.d2' not in names  # the whole view is not laid out when split
     assert 'application-identity-access.html' in names and 'application-identity-access.csv' in names
-    assert 'application-identity-unspecified.d2' in names and 'application-identity-unspecified-access.html' in names
+    assert 'application-identity-dev.d2' in names and 'application-identity-dev-access.html' in names
     index = (out / 'application-identity-index.html').read_text()
-    assert (out / 'application-identity-unspecified.html').exists()  # the viewer
-    assert 'application-identity-unspecified.html' in index
-    assert 'application-identity-unspecified.svg' in index and 'application-identity-access.html' in index
+    assert (out / 'application-identity-dev.html').exists()  # the viewer
+    assert 'application-identity-dev.html' in index
+    assert 'application-identity-dev.svg' in index and 'application-identity-access.html' in index
     assert 'https://' not in index
 
 
@@ -436,4 +436,4 @@ def test_split_removes_superseded_whole_view_and_stale_environment_files(tmp_pat
     (out / 'application-gone.svg').write_text('old')
     assert cli.main(base + ['--split', 'environment']) == 0
     assert not (out / 'application.html').exists() and not (out / 'application.d2').exists() and not (out / 'application-gone.svg').exists()
-    assert (out / 'application-unspecified.d2').exists()
+    assert (out / 'application-dev.d2').exists()

@@ -192,7 +192,7 @@ def test_access_html_is_self_contained_and_filterable():
     page = render_html(rows, 'Access', 'x-access.csv', back='x-index.html')
     assert not re.search(r'https?://|//cdn|<link|src=', page)
     assert page.count('<tr>') == len(rows) + 1
-    assert page.count('class="colfilter"') == 12 and 'id="q"' in page and 'Showing' in page
+    assert page.count('class="colfilter"') == 13 and 'id="q"' in page and 'Showing' in page
     assert 'x-access.csv' in page and 'x-index.html' in page
     assert 'Secrets User' in page
 
