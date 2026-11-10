@@ -38,7 +38,7 @@ def fake_az(directory=DIRECTORY, calls=None, graph_error=None):
             assert args[args.index('--method') + 1] == 'POST'
             assert args[args.index('--url') + 1] == 'https://graph.microsoft.com/v1.0/directoryObjects/getByIds'
             body = json.loads(args[args.index('--body') + 1])
-            assert body['types'] == ['user', 'group', 'servicePrincipal'] and len(body['ids']) <= 1000
+            assert body['types'] == ['user', 'group', 'servicePrincipal', 'device'] and len(body['ids']) <= 1000
             if calls is not None:
                 calls.append(body['ids'])
             if graph_error:
@@ -47,7 +47,7 @@ def fake_az(directory=DIRECTORY, calls=None, graph_error=None):
         if args[:3] == ['role', 'assignment', 'list']:
             return []
         return {'data': [{'type': 'microsoft.authorization/roleassignments', 'properties': {
-            'principalId': pid.upper(), 'scope': SCOPE, 'roleDefinitionId': 'r', 'principalType': 'x'}}
+            'principalId': pid.upper(), 'scope': SCOPE, 'roleDefinitionId': 'r', 'principalType': 'ServicePrincipal'}}
             for pid in (SP, GRP, USR, MI, GONE, SP)]}
     return run
 
@@ -215,3 +215,26 @@ def test_filtered_evidence_keeps_graph_names():
     assert out.principals == ev.principals
     _p, view = overlay(out, graph)
     assert not any('Unresolved' in n.label for n in view.nodes)
+
+
+def test_device_is_looked_up_and_foreign_group_is_never_marked_deleted(tmp_path):
+    dev, foreign = '0000000a-0000-0000-0000-000000000000', '0000000b-0000-0000-0000-000000000000'
+    directory = {dev: graph_object('device', dev, 'LAPTOP-1')}
+    def run(args):
+        if args[0] == 'rest':
+            body = json.loads(args[args.index('--body') + 1])
+            assert 'device' in body['types']
+            return {'value': [directory[i] for i in body['ids'] if i in directory]}
+        if args[:3] == ['role', 'assignment', 'list']:
+            return []
+        return {'data': [{'type': 'microsoft.authorization/roleassignments', 'properties': {
+            'principalId': pid, 'scope': SCOPE, 'roleDefinitionId': 'r', 'principalType': t}}
+            for pid, t in ((dev, 'Device'), (foreign, 'ForeignGroup'))]}
+    evidence = extract_security(cfg_for(tmp_path), run)
+    assert evidence.principals[dev].kind == 'device' and not evidence.principals[dev].deleted
+    assert foreign not in evidence.principals  # not returned, but its type was not searched: not "deleted"
+    graph, vault = world()
+    out, _ = filter_evidence(SecurityEvidence(grants=[Grant(dev, 'r', 'Reader', vault, principal_type='Device')],
+                                              principals=evidence.principals), graph,
+                             GrantFilter(principal_kinds=frozenset({'device'})))
+    assert [g.principal_id for g in out.grants] == [dev]

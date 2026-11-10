@@ -50,7 +50,10 @@ def resolve_builtin_roles(cfg: Target, rows: list[dict], run, notes: list[str]) 
 
 GRAPH_GET_BY_IDS = 'https://graph.microsoft.com/v1.0/directoryObjects/getByIds'
 GRAPH_BATCH = 1000  # getByIds accepts at most 1000 IDs per request
-GRAPH_TYPES = ['user', 'group', 'servicePrincipal']
+GRAPH_TYPES = ['user', 'group', 'servicePrincipal', 'device']
+# RBAC principalType values that fall inside GRAPH_TYPES. Any other (ForeignGroup lives in another tenant) cannot be
+# found by this lookup, so not being returned says nothing about whether it exists.
+LOOKUP_PRINCIPAL_TYPES = {'', 'user', 'group', 'serviceprincipal', 'device'}
 CACHE_VERSION = 2   # 1: grants only. 2: adds `principals`. Both load.
 
 
@@ -64,11 +67,12 @@ def _directory_principal(obj: dict) -> DirectoryPrincipal | None:
                               str(obj.get('appId') or ''), arm.lower(), str(obj.get('userPrincipalName') or ''))
 
 
-def resolve_directory(ids: list[str], run) -> tuple[dict[str, DirectoryPrincipal], str]:
+def resolve_directory(ids: list[str], run, unsearchable=frozenset()) -> tuple[dict[str, DirectoryPrincipal], str]:
     """Look up principal IDs in Microsoft Graph with read-only getByIds POSTs (a POST used as a bulk read).
 
     Returns the principals found, plus a deleted marker for every ID of a batch Graph answered but did not return, and a
-    reason if any batch could not be answered (nothing is recorded for the IDs of such a batch). Never raises."""
+    reason if any batch could not be answered (nothing is recorded for the IDs of such a batch). An ID in `unsearchable`
+    (its type is outside GRAPH_TYPES) is recorded only if returned, never as deleted. Never raises."""
     found: dict[str, DirectoryPrincipal] = {}
     failure = ''
     ids = sorted(set(ids))
@@ -86,7 +90,10 @@ def resolve_directory(ids: list[str], run) -> tuple[dict[str, DirectoryPrincipal
             continue
         returned = {p.principal_id: p for o in objects if isinstance(o, dict) and (p := _directory_principal(o))}
         for pid in batch:
-            found[pid] = returned.get(pid) or DirectoryPrincipal(pid, deleted=True)
+            if pid in returned:
+                found[pid] = returned[pid]
+            elif pid not in unsearchable:
+                found[pid] = DirectoryPrincipal(pid, deleted=True)
     return found, failure
 
 
@@ -121,7 +128,8 @@ def extract_security(cfg: Target, run=None) -> SecurityEvidence:
     evidence = grants_from_rows(rows, subscription=cfg.subscription)
     ids = [g.principal_id for g in evidence.grants if GUID.match(g.principal_id)]
     if ids:
-        evidence.principals, failure = resolve_directory(ids, run)
+        outside = {g.principal_id for g in evidence.grants if g.principal_type.casefold() not in LOOKUP_PRINCIPAL_TYPES}
+        evidence.principals, failure = resolve_directory(ids, run, outside)
         if failure:
             message = (f'Microsoft Graph principal lookup failed ({failure}); principals it could not answer for keep '
                        'their IDs and are drawn as unresolved')
