@@ -20,19 +20,20 @@ def test_write_viewer_puts_html_beside_svg_with_the_svg_inlined(tmp_path):
     assert "<title>application-c4-identity</title>" in text
 
 
-def test_viewer_inlines_the_vendored_library_and_keeps_its_licence():
+def test_viewer_inlines_the_camera_logic_and_has_every_control():
     text = viewer.viewer_html(SVG, "t")
-    assert "svg-pan-zoom v3.6.2" in text
-    assert "Redistribution and use in source and binary forms" in text
-    assert "svgPanZoom(svg" in text
+    assert "var ViewerLogic" in text
+    for control in ('id="zin"', 'id="zout"', 'id="fit"', 'id="reset"', 'id="zoom"'):
+        assert control in text
+    assert "svgPanZoom" not in text
 
 
 def test_viewer_is_self_contained(tmp_path):
     text = viewer.viewer_html(SVG, "t")
     assert not re.search(r"<script[^>]+src=|<link[^>]+href=|<img[^>]+src=|@import|url\(\s*['\"]?https?:", text, re.IGNORECASE)
-    # Every URL left in the page is a W3C XML namespace identifier or the library's own credit line.
+    # The only URLs left in the page are W3C XML namespace identifiers.
     urls = {u for u in re.findall(r"https?://[^\s\"'<>)]+", text) if not u.startswith("http://www.w3.org/")}
-    assert urls == {"https://github.com/bumbu/svg-pan-zoom"}, urls
+    assert urls == set(), urls
 
 
 def test_viewer_title_is_escaped():
@@ -56,13 +57,34 @@ def test_render_writes_a_viewer_per_svg_and_prints_both_paths(tmp_path, monkeypa
         assert Path(line).exists()
 
 
-def test_viewer_handles_touch_pinch_itself_rather_than_relying_on_the_library():
+def test_gestures_move_a_composited_layer_and_settle_to_a_crisp_viewbox():
     text = viewer.viewer_html(SVG, "t")
-    assert "customEventsHandler: touchHandler" in text
-    assert "zoomAtPointBy(" in text and "touchmove" in text
+    assert "will-change: transform;" in text
+    assert "svg.style.transform = 'translate(" in text  # a gesture step is only a transform ...
+    assert "svg.setAttribute('viewBox'" in text  # ... and settling re-renders by rewriting the viewBox
+    assert "SETTLE_MS = 150" in text
 
 
-def test_one_to_one_sets_an_absolute_scale_not_the_fitted_one():
+def test_viewer_handles_wheel_drag_pinch_keys_and_iframes():
     text = viewer.viewer_html(SVG, "t")
-    assert "resetZoom" not in text.split("svgPanZoom(svg, {", 1)[1]  # the library itself defines it; the page must not call it
-    assert "pz.zoom(pz.getZoom() / pz.getSizes().realZoom)" in text
+    assert "addEventListener('wheel'" in text and "passive: false" in text
+    assert "'pointerdown'" in text and "pointers.size === 2" in text  # one pointer pans, two pinch
+    assert "touch-action: none" in text
+    assert "window.focus()" in text  # keys reach the page inside an iframe
+    assert "e.ctrlKey || e.metaKey" in text  # Ctrl+F and browser shortcuts are not hijacked
+    assert "ResizeObserver" in text  # the iframe can be resized by the master page
+    assert "selectionchange" in text  # find-in-page matches are brought on screen
+
+
+def test_hover_titles_are_left_to_the_svg():
+    svg = SVG.replace("<text>", "<g><title>hover me</title><path d='M0 0' style='stroke:transparent;stroke-width:12'/></g><text>")
+    text = viewer.viewer_html(svg, "t")
+    assert "<title>hover me</title>" in text and "stroke-width:12" in text
+
+
+def test_svg_layer_is_larger_than_the_viewport_so_panning_and_zooming_out_do_not_show_blank():
+    text = viewer.viewer_html(SVG, "t")
+    assert "OVERSCAN = 0.5" in text and "L.overscanBox(cam, W, H, OVERSCAN)" in text
+    assert "svg.style.transformOrigin" in text
+    assert "#stage > svg { position: absolute;" in text  # not width/height 100%: the script sizes it past the viewport
+    assert "#stage { position: fixed; inset: 0; overflow: hidden;" in text  # the stage still clips to the window

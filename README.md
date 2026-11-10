@@ -80,9 +80,12 @@ out/Contoso-Dev/applications/application-c4-identity.html
 
 The viewer fills the browser window. Scroll (or pinch on a touch screen) to zoom without a limit (the SVG stays vector-sharp), drag to pan,
 double-click to zoom in, and use the **+**, **−**, **Fit** and **1:1** (actual size, 100%) buttons (or the keys `+`, `-`, `F`, `0`).
-It is a single self-contained file: the SVG and a vendored copy of
-[svg-pan-zoom](https://github.com/bumbu/svg-pan-zoom) (BSD-2-Clause, version and source in
-`src/infradiag/vendor/README.md`) are inlined, so it needs no network and no server. Open it with a double-click in
+While you zoom or pan, the viewer only moves the already-drawn diagram as a GPU layer, so it stays smooth even on a
+large diagram. About 150 ms after you stop it redraws the diagram sharply at the new zoom, so text and lines look
+blurry for a moment while you zoom in a long way. Hover tooltips and Ctrl+F search work on the settled diagram, and a
+search match that is off screen is brought to the middle.
+It is a single self-contained file: the SVG and a small script (`src/infradiag/viewer_logic.js` plus the page glue in
+`viewer.py`) are inlined, so it needs no network, no server and no library. Open it with a double-click in
 Explorer or from a `\\wsl.localhost\...` path in Edge. From a WSL shell:
 
 ```sh
@@ -129,8 +132,8 @@ each with a small "all diagrams" link that opens the master page on that item. T
 script, `out/nav.js`, because `fetch` of local JSON is blocked on `file://`; plain `.svg` files are never touched.
 Pages are discovered by content and their `<title>` is the label, so new file names appear without changes.
 
-The HTML is about as large as the SVG (the ~1 MB USA-NonProd application view gives a ~1.07 MB page). Very large
-views can pan and zoom slowly because the browser repaints every element; narrow the view if so.
+The HTML is about as large as the SVG (the ~1 MB USA-NonProd application view gives a ~1.05 MB page). The final
+sharp redraw of a very large view can still take a moment; `--split environment` keeps each diagram small.
 
 ## Config reference (`infradiag.yaml`)
 
