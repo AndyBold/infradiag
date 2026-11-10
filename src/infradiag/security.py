@@ -33,16 +33,81 @@ class Attachment:
     source: str = 'azure'
 
 
+@dataclass(frozen=True)
+class DirectoryPrincipal:
+    """What Microsoft Graph records about a principal ID: directory metadata only, nothing secret.
+
+    `deleted` is a principal ID Graph was asked about and did not return (the object no longer exists); it is not set
+    when Graph could not be asked at all, in which case no entry is recorded."""
+    principal_id: str
+    name: str = ''
+    object_type: str = ''      # 'user', 'group' or 'serviceprincipal'
+    sp_type: str = ''          # servicePrincipalType: ManagedIdentity, Application, Legacy, SocialIdp
+    app_id: str = ''
+    resource_id: str = ''      # managed identities: the ARM resource ID Graph records in alternativeNames
+    upn: str = ''              # users: userPrincipalName
+    deleted: bool = False
+
+    @property
+    def kind(self) -> str:
+        """The principal kind as the access table and --principal-kind see it."""
+        if self.deleted:
+            return 'deleted'
+        if self.object_type == 'serviceprincipal':
+            if self.sp_type.casefold() == 'managedidentity':
+                rid = self.resource_id.casefold()
+                if not rid:
+                    return 'managed identity'
+                return 'managed identity (user-assigned)' if '/userassignedidentities/' in rid else 'managed identity (system-assigned)'
+            return 'service principal'
+        return self.object_type or 'unresolved'
+
+    @property
+    def display_name(self) -> str:
+        return (self.upn or self.name) if self.object_type == 'user' else self.name
+
+    @property
+    def kind_label(self) -> str:
+        """The kind as drawn in brackets after the name."""
+        if self.kind.startswith('managed identity'):
+            return 'Managed identity'
+        if self.kind == 'service principal':
+            return 'Application' if self.sp_type.casefold() == 'application' else 'Service principal'
+        return self.kind.capitalize()
+
+    @property
+    def label(self) -> str:
+        return f'Deleted principal {self.principal_id}' if self.deleted else f'{self.display_name or self.principal_id} [{self.kind_label}]'
+
+    @property
+    def tooltip(self) -> str:
+        lines = [self.label] if not self.deleted else [self.label, 'Not found in Microsoft Graph: the principal was deleted.']
+        if not self.deleted:
+            lines.append(f'Type: {self.kind}')
+            if self.name and self.name != self.display_name:
+                lines.append(f'Display name: {self.name}')
+            if self.app_id:
+                lines.append(f'Application ID: {self.app_id}')
+            if self.resource_id:
+                lines.append(f'Resource: {self.resource_id}')
+        lines.append(f'Principal ID: {self.principal_id}')
+        return '\n'.join(lines)
+
+
 @dataclass
 class SecurityEvidence:
     attachments: list[Attachment] = field(default_factory=list)
     grants: list[Grant] = field(default_factory=list)
     coverage: list[str] = field(default_factory=list)
+    # Principal ID (lower case) -> Microsoft Graph metadata. Empty when never looked up or Graph was unavailable.
+    principals: dict[str, DirectoryPrincipal] = field(default_factory=dict)
 
     def extend(self, other: SecurityEvidence) -> None:
         self.attachments.extend(a for a in other.attachments if a not in self.attachments)
         self.grants.extend(g for g in other.grants if g not in self.grants)
         self.coverage.extend(c for c in other.coverage if c not in self.coverage)
+        for pid, principal in other.principals.items():
+            self.principals.setdefault(pid, principal)
 
 
 def scope_contains(scope: str, resource_id: str) -> bool:
@@ -103,6 +168,18 @@ def resolve_principals(graph: Graph, evidence: SecurityEvidence) -> dict[str, tu
             for meta in n.metadata.values():
                 if pid := str((meta.get('properties') or {}).get('principalId') or '').lower():
                     principals.setdefault(pid, (n.name, 'managed identity (user-assigned)'))
+    for pid, p in evidence.principals.items():
+        if pid in principals:
+            continue
+        node = graph.nodes.get(normalise_id(p.resource_id)) if p.resource_id else None
+        if node and p.kind.startswith('managed identity'):
+            # Graph's ARM resource ID names the identity even when the principal ID is on no attachment.
+            suffix = '' if node.type == UAI else ' (system-assigned)'
+            principals[pid] = (node.name + suffix, p.kind)
+        elif p.deleted:
+            principals[pid] = ('deleted principal', 'deleted')
+        else:
+            principals[pid] = (p.display_name or pid, p.kind)
     return principals
 
 

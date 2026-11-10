@@ -104,6 +104,11 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
         # grants are matched to identities through principal IDs from either source. Provenance is kept on the node's
         # sublabel and on every edge, so an identity or attachment present in only one source still shows as drift.
         principals: dict[str, str] = {}
+        # Microsoft Graph records the ARM resource ID of a managed identity, which finds it when its name differs from
+        # the resource's; that match comes before principal IDs read from the resources themselves.
+        for pid, p in evidence.principals.items():
+            if p.resource_id and normalise_id(p.resource_id) in graph.nodes and p.kind.startswith('managed identity'):
+                principals[pid] = normalise_id(p.resource_id)
         for a in attachments:
             if a.principal_id:
                 principals.setdefault(a.principal_id, a.identity_id)
@@ -192,9 +197,15 @@ def apply_overlay(projection: ViewProjection, graph: Graph, evidence: SecurityEv
                     name += ' (system-assigned)'
                 key = identity_key(identity_id, name, 'identity', grant.source, grant.principal_id)
             else:
-                # Not a visible identity: retain the principal ID rather than asserting what kind of principal it is.
-                key = identity_key(f'principal:{grant.principal_id}', f'Unresolved principal {grant.principal_id}',
-                                   'principal', grant.source)
+                known = evidence.principals.get(grant.principal_id)
+                if known:
+                    # Named by Microsoft Graph; the ID stays on hover, not in the label.
+                    key = identity_key(f'principal:{grant.principal_id}', known.label, 'principal', grant.source)
+                    nodes[key].tooltip = known.tooltip
+                else:
+                    # Not a visible identity: retain the principal ID rather than asserting what kind of principal it is.
+                    key = identity_key(f'principal:{grant.principal_id}', f'Unresolved principal {grant.principal_id}',
+                                       'principal', grant.source)
             # An assignment above the resources (subscription, management group) is drawn once, to a boundary
             # node for the subscription, rather than once per resource it covers. A resource-group assignment
             # gets the same treatment when it covers several visible elements. Resource scope stays on the resource.
