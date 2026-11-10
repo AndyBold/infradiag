@@ -14,7 +14,8 @@ from .security import Grant, SecurityEvidence, resolve_principals, role_key
 
 HIDE_SCOPES = ('subscription', 'management-group', 'resource-group', 'tenant')
 ROLE_PLANES = ('data', 'control')
-PRINCIPAL_KINDS = ('managed-identity', 'user', 'group', 'service-principal', 'device', 'unresolved')
+PRINCIPAL_KINDS = ('managed-identity', 'user', 'group', 'service-principal', 'device', 'deleted',
+                  'unresolved')
 _SCOPE_TOKEN = {'subscription': 'sub', 'management-group': 'mg', 'resource-group': 'rg', 'tenant': 'tenant'}
 _KIND_TOKEN = {'managed-identity': 'mi', 'service-principal': 'sp', 'unresolved': 'unres'}
 _PRINCIPAL_TYPES = {'user': 'user', 'group': 'group', 'foreigngroup': 'group', 'serviceprincipal': 'service-principal',
@@ -141,5 +142,5 @@ def filter_evidence(evidence: SecurityEvidence, graph: Graph, flt: GrantFilter) 
         lines.append(f'{sum(unclassified.values())} grant(s) with roles of unknown plane ({shown}) are hidden by '
                      f'--role-plane {flt.role_plane}: their definitions were not read. Re-run extract --azure --security '
                      'to classify them.')
-    result = SecurityEvidence(list(evidence.attachments), kept, list(evidence.coverage))
+    result = SecurityEvidence(list(evidence.attachments), kept, list(evidence.coverage), dict(evidence.principals))
     return result, FilterReport(lines)

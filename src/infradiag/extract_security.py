@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import asdict
 
 from .azcli import AzError, run_az
 from .cache import write_json
 from .config import Target
-from .security import Grant, SecurityEvidence, grants_from_rows, role_key
+from .security import DirectoryPrincipal, Grant, SecurityEvidence, grants_from_rows, role_key
 
 COVERAGE = ('RBAC grants visible to the querying account; not effective-access evaluation. '
             'Group membership, deny assignments, service-specific policies and runtime usage are not evaluated.')
@@ -47,6 +48,48 @@ def resolve_builtin_roles(cfg: Target, rows: list[dict], run, notes: list[str]) 
                              'properties': {'roleName': name, 'permissions': definition.get('permissions') or []}})
 
 
+GRAPH_GET_BY_IDS = 'https://graph.microsoft.com/v1.0/directoryObjects/getByIds'
+GRAPH_BATCH = 1000  # getByIds accepts at most 1000 IDs per request
+GRAPH_TYPES = ['user', 'group', 'servicePrincipal']
+CACHE_VERSION = 2   # 1: grants only. 2: adds `principals`. Both load.
+
+
+def _directory_principal(obj: dict) -> DirectoryPrincipal | None:
+    pid = str(obj.get('id') or '').lower()
+    if not pid:
+        return None
+    kind = str(obj.get('@odata.type') or '').rsplit('.', 1)[-1].casefold()
+    arm = next((n for n in obj.get('alternativeNames') or [] if isinstance(n, str) and n.startswith('/')), '')
+    return DirectoryPrincipal(pid, str(obj.get('displayName') or ''), kind, str(obj.get('servicePrincipalType') or ''),
+                              str(obj.get('appId') or ''), arm.lower(), str(obj.get('userPrincipalName') or ''))
+
+
+def resolve_directory(ids: list[str], run) -> tuple[dict[str, DirectoryPrincipal], str]:
+    """Look up principal IDs in Microsoft Graph with read-only getByIds POSTs (a POST used as a bulk read).
+
+    Returns the principals found, plus a deleted marker for every ID of a batch Graph answered but did not return, and a
+    reason if any batch could not be answered (nothing is recorded for the IDs of such a batch). Never raises."""
+    found: dict[str, DirectoryPrincipal] = {}
+    failure = ''
+    ids = sorted(set(ids))
+    for start in range(0, len(ids), GRAPH_BATCH):
+        batch = ids[start:start + GRAPH_BATCH]
+        body = json.dumps({'ids': batch, 'types': GRAPH_TYPES})
+        try:
+            reply = run(['rest', '--method', 'POST', '--url', GRAPH_GET_BY_IDS, '--headers', 'Content-Type=application/json',
+                         '--body', body]) or {}
+            objects = reply.get('value') if isinstance(reply, dict) else None
+            if not isinstance(objects, list):
+                raise AzError('unexpected Graph response')
+        except AzError as exc:
+            failure = failure or (str(exc).strip().splitlines() or ['no detail'])[0][:300]
+            continue
+        returned = {p.principal_id: p for o in objects if isinstance(o, dict) and (p := _directory_principal(o))}
+        for pid in batch:
+            found[pid] = returned.get(pid) or DirectoryPrincipal(pid, deleted=True)
+    return found, failure
+
+
 def extract_security(cfg: Target, run=None) -> SecurityEvidence:
     run = run or run_az
     rows, notes = [], [COVERAGE]
@@ -76,9 +119,18 @@ def extract_security(cfg: Target, run=None) -> SecurityEvidence:
         notes.append(f'Incomplete ancestor grant coverage: {exc}')
     resolve_builtin_roles(cfg, rows, run, notes)
     evidence = grants_from_rows(rows, subscription=cfg.subscription)
+    ids = [g.principal_id for g in evidence.grants if GUID.match(g.principal_id)]
+    if ids:
+        evidence.principals, failure = resolve_directory(ids, run)
+        if failure:
+            message = (f'Microsoft Graph principal lookup failed ({failure}); principals it could not answer for keep '
+                       'their IDs and are drawn as unresolved')
+            print(f'warning: {message}', file=sys.stderr)
+            notes.append(message[0].upper() + message[1:] + '.')
     evidence.coverage = notes + evidence.coverage
-    write_json(cfg.cache_dir / 'security.json', {'version': 1, 'subscription': cfg.subscription,
-               'grants': [asdict(g) for g in evidence.grants], 'coverage': evidence.coverage})
+    write_json(cfg.cache_dir / 'security.json', {'version': CACHE_VERSION, 'subscription': cfg.subscription,
+               'grants': [asdict(g) for g in evidence.grants], 'coverage': evidence.coverage,
+               'principals': {pid: asdict(p) for pid, p in sorted(evidence.principals.items())}})
     return evidence
 
 
@@ -89,8 +141,10 @@ def load_security(cfg: Target) -> SecurityEvidence:
                                 f'`infradiag extract --azure --security --subscription {cfg.subscription}`.'])
     try:
         raw = json.loads(path.read_text())
-        if raw.get('version') != 1 or raw.get('subscription', '').lower() != cfg.subscription.lower():
+        if raw.get('version') not in (1, CACHE_VERSION) or raw.get('subscription', '').lower() != cfg.subscription.lower():
             raise ValueError('cache version or subscription mismatch')
-        return SecurityEvidence(grants=[Grant(**g) for g in raw['grants']], coverage=list(raw['coverage']))
+        principals = {pid: DirectoryPrincipal(**p) for pid, p in (raw.get('principals') or {}).items()}
+        return SecurityEvidence(grants=[Grant(**g) for g in raw['grants']], coverage=list(raw['coverage']),
+                                principals=principals)
     except (ValueError, TypeError, KeyError) as exc:
         return SecurityEvidence(coverage=[f'Incomplete security cache: {exc}; re-run extract --azure --security.'])

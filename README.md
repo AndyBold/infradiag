@@ -360,7 +360,7 @@ and with every view and style.
 | --- | --- |
 | `--hide-scope subscription\|management-group\|resource-group\|tenant` (repeatable) | everything except grants made at those scopes. Subscription and management-group grants are the inherited ones, drawn once each to the subscription node; resource-group grants cover a group |
 | `--role-plane data` / `control` | `data`: roles with any `dataActions` (Key Vault Secrets User, Storage Blob Data Contributor). `control`: roles with `actions` but no `dataActions` (Contributor, Owner, Reader). `notActions`/`notDataActions` are not subtracted, so the two sets never overlap |
-| `--principal-kind managed-identity\|user\|group\|service-principal\|device\|unresolved` (repeatable) | only these principals. A principal that is a visible identity is a managed identity; otherwise the assignment's recorded principal type is used; with neither it is `unresolved`. Caches written before principal types were recorded show everything non-identity as `unresolved` |
+| `--principal-kind managed-identity\|user\|group\|service-principal\|device\|deleted\|unresolved` (repeatable) | only these principals. The kind comes from Microsoft Graph (see *Principal names* below), else from a visible identity (a managed identity), else from the assignment's recorded principal type. `deleted`: Graph was asked and the principal no longer exists. `unresolved`: nothing could say, e.g. Graph was unavailable at extract time or the cache predates principal names |
 | `--role NAME` (repeatable) | only grants of these roles, matched case-insensitively on the exact role name |
 | `--drift-only` | only grants evidenced by one source (Bicep or Azure) alone. Drift is judged on every grant before the other filters apply |
 
@@ -432,6 +432,25 @@ service-specific authorization are outside the initial RBAC overlay. Firewall ru
 actual traffic and runtime routing are not evaluated. No returned grant means no visible
 cached evidence, not no access. System-assigned identities are named after their workload;
 unresolved principals/roles retain their IDs.
+
+## Principal names
+
+`extract --azure --security` looks up every distinct principal ID of the subscription's grants in Microsoft Graph
+(`az rest --method POST` to `directoryObjects/getByIds`, batches of at most 1000; a POST used as a read, no Graph
+write endpoint is called) and caches, in `security.json` (version 2; version 1 caches still load), only directory
+metadata: display name, object type, `servicePrincipalType` (ManagedIdentity, Application, ...), `appId`, the ARM
+resource ID Graph records for a managed identity, and a user's `userPrincipalName`. Tokens are never printed or stored.
+The signed-in account needs permission to read directory objects (any member of the tenant normally has it).
+
+- Principal nodes are labelled with name and kind, such as `CrowdStrike Falcon Cloud Security [Application]`,
+  `Platform Admins [Group]` or `jane@example.com [User]`; the principal ID is on hover. A principal Graph does not return
+  was deleted and is drawn as `Deleted principal <guid>`.
+- A managed identity is matched to its Azure resource by the ARM resource ID in Graph, then by principal ID on the
+  attachments, so it merges with the identity node already drawn. One whose resource is not in the diagram is drawn as a
+  named principal `[Managed identity]`.
+- The access table and CSV carry the same names and types; `--principal-kind` filters on them.
+- If Graph is denied or unreachable, extract does not fail: it warns once on stderr, notes it in the diagram notes, and
+  those principals stay `Unresolved principal <guid>` (kind `unresolved`) as before.
 
 ## Cost
 
